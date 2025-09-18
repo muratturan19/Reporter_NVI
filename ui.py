@@ -439,8 +439,13 @@ def build_interface() -> gr.Blocks:
         # Otomatik log güncellemesi
         demo.load(
             update_ui_periodically,
-            outputs=log_display,
-            every=2  # Her 2 saniyede bir güncelle
+            outputs=log_display
+        )
+
+        log_timer = gr.Timer(interval=2)
+        log_timer.tick(
+            update_ui_periodically,
+            outputs=log_display
         )
         
         # Buton ve enter tuşu olayları

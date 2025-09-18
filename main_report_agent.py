@@ -160,34 +160,20 @@ def _parse_section_entry(entry: Any) -> Optional[Section]:
 
 
 # Planlama promptı
-REPORT_PLANNER_PROMPT = """
-Sen deneyimli bir rapor planlama uzmanısın. Verilen konu ve araştırma verilerini kullanarak detaylı rapor yapısı oluşturuyorsun.
+REPORT_PLANNER_PROMPT = """Sen bir rapor planlama uzmanısın. Konu hakkında araştırma raporu yapısı oluşturacaksın.
 
-ÖNEMLİ: Yanıtını SADECE JSON formatında ver, başka hiçbir açıklama ekleme.
+SADECE JSON formatında yanıt ver. Başka hiçbir metin ekleme.
 
-Rapor planlarken:
-1. Konuyu kapsamlı şekilde ele al
-2. 4-6 bölümden oluşan mantıklı bir akış oluştur
-3. Her bölüm için net açıklama yaz
-4. Türk okuyucu kitlesini göz önünde bulundur
-
-SADECE ŞU FORMATTA YANIT VER:
-{
-  "title": "Rapor Başlığı",
+JSON formatı:
+{{
+  "title": "Rapor başlığı burada",
   "sections": [
-    {
-      "name": "Bölüm Adı",
-      "description": "Bu bölümde neyin ele alınacağının detaylı açıklaması",
-      "research": true
-    },
-    {
-      "name": "İkinci Bölüm",
-      "description": "İkinci bölümün açıklaması",
-      "research": false
-    }
+    {{"name": "Bölüm adı", "description": "Bu bölümün içeriği", "research": true}},
+    {{"name": "Başka bölüm", "description": "Bu bölümün içeriği", "research": false}}
   ]
-}
-"""
+}}
+
+4-6 bölümlü bir rapor planla. research: true olanlar için ek araştırma yapılacak."""
 
 PLANNER_HUMAN_PROMPT = """
 Konu: {topic}
@@ -262,73 +248,83 @@ class MainReportAgent:
             """Rapor yapısını planla"""
             logger.info("Rapor planlanıyor...")
 
+            topic = getattr(state, "topic", "")
+            research_data = getattr(state, "research_data", "")
+            if not isinstance(research_data, str):
+                research_data = str(research_data)
+
             messages = self.planner_prompt.format_messages(
-                topic=state.topic,
-                research_data=state.research_data[:2000]  # İlk 2000 karakter
+                topic=topic,
+                research_data=research_data[:2000]  # İlk 2000 karakter
             )
 
             response = await self.llm.ainvoke(messages)
 
+            from json_parser_fix import parse_json_from_response, create_fallback_structure
+
             try:
-                # JSON yanıtını parse et - daha güvenli yöntem
-                content = response.content.strip()
+                plan_data = parse_json_from_response(response.content)
 
-                # JSON bloğunu bul
-                json_start = content.find('{')
-                json_end = content.rfind('}') + 1
+                if not isinstance(plan_data, dict):
+                    raise TypeError("Model yanıtı dict formatında değil")
+                if "title" not in plan_data or "sections" not in plan_data:
+                    raise KeyError("JSON'da gerekli alanlar bulunamadı")
 
-                if json_start == -1 or json_end <= json_start:
-                    raise ValueError("Geçerli JSON bulunamadı")
-
-                json_str = content[json_start:json_end]
-                plan_data_raw = json.loads(json_str)
-                plan_data = _normalize_plan_response(plan_data_raw)
-
-                title = _get_first_value(
-                    plan_data,
-                    ["title", "rapor başlığı", "rapor_baslığı", "rapor basligi", "başlık"],
-                )
-
-                if isinstance(title, (list, dict)):
-                    title = _get_first_value(title, ["title", "name", "başlık"])
-                if isinstance(title, (int, float)):
-                    title = str(title)
-                if isinstance(title, str):
-                    title = title.strip().strip('"').strip("'")
-
-                raw_sections = plan_data.get("sections") or plan_data.get("bölümler")
-                raw_sections = _normalize_plan_response(raw_sections)
-
-                if isinstance(raw_sections, dict):
-                    raw_sections = list(raw_sections.values())
-
-                if not isinstance(raw_sections, list):
-                    raise ValueError("Plan çıktısı beklenen alanları içermiyor")
+                sections_data = plan_data.get("sections", [])
+                if isinstance(sections_data, dict):
+                    sections_iterable = list(sections_data.values())
+                elif isinstance(sections_data, list):
+                    sections_iterable = sections_data
+                else:
+                    raise TypeError("sections alanı list ya da dict değil")
 
                 sections: List[Section] = []
-                for raw_section in raw_sections:
-                    section = _parse_section_entry(raw_section)
-                    if section:
-                        sections.append(section)
+                for section_data in sections_iterable:
+                    if not isinstance(section_data, dict):
+                        logger.warning("Geçersiz bölüm verisi atlandı: %s", section_data)
+                        continue
+                    sections.append(Section(
+                        name=section_data.get("name", "Adsız Bölüm"),
+                        description=section_data.get("description", "Açıklama yok"),
+                        research=_coerce_bool(section_data.get("research", False))
+                    ))
 
                 if not sections:
                     raise ValueError("Plan çıktısında kullanılabilir bölüm bulunamadı")
 
-                state.report_structure = ReportStructure(title=title, sections=sections)
-                logger.info(f"Rapor planlandı: {len(sections)} bölüm")
-
-            except Exception as e:
-                logger.error(f"Rapor planlama hatası: {e}")
-                # Varsayılan yapı oluştur
-                state.report_structure = ReportStructure(
-                    title=f"{state.topic or 'Genel'} Raporu",
-                    sections=[
-                        Section("Giriş", "Konuya genel bakış", False),
-                        Section("Detaylar", "Konunun detaylı analizi", True),
-                        Section("Sonuç", "Bulgular ve öneriler", False)
-                    ]
+                report_structure = ReportStructure(
+                    title=plan_data.get("title", f"{topic or 'Genel'} Raporu"),
+                    sections=sections
                 )
 
+                logger.info(
+                    "Rapor planlandı: %s bölüm - %s",
+                    len(sections),
+                    report_structure.title
+                )
+
+            except Exception as e:
+                logger.error(f"JSON parsing hatası: {e}")
+                logger.warning("Fallback yapı kullanılıyor")
+
+                fallback_topic = topic or "Genel Konu"
+                plan_data = create_fallback_structure(fallback_topic)
+
+                sections: List[Section] = []
+                for section_data in plan_data["sections"]:
+                    sections.append(Section(
+                        name=section_data["name"],
+                        description=section_data["description"],
+                        research=_coerce_bool(section_data["research"])
+                    ))
+
+                report_structure = ReportStructure(
+                    title=plan_data["title"],
+                    sections=sections
+                )
+                logger.info(f"Fallback rapor yapısı oluşturuldu: {len(sections)} bölüm")
+
+            state.report_structure = report_structure
             return state
 
         async def write_sections(state: ReportAgentState):

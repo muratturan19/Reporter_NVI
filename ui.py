@@ -1,769 +1,525 @@
-# -*- coding: utf-8 -*-
-"""Geliştirilmiş Gradio tabanlı kullanıcı arayüzü.
-
-Bu arayüz, mevcut rapor oluşturma ajanını kullanarak kullanıcıların konu
-başlıklarını girmesine ve oluşturulan raporu hem görüntülemesine hem de
-indirmesine olanak tanır. Real-time progress tracking ve modern görsel tasarım içerir.
-"""
-
 from __future__ import annotations
 
-import inspect
-import os
-import asyncio
-import logging
-import time
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
-from queue import Queue
-
 import gradio as gr
-from dotenv import load_dotenv
-
-from main_report_agent import MainReportAgent
-from provider_manager import ProviderFactory
-from report_agent_setup import (
-    DEFAULT_LLM_PROVIDER_ID,
-    DEFAULT_SEARCH_PROVIDERS,
-)
-
-# Ortam değişkenlerini yükle
-load_dotenv()
-
-# Global değişkenler
-_agent: Optional[MainReportAgent] = None
-_agent_config: Optional[Dict[str, Sequence[str]]] = None
-_log_queue = Queue()
-
-
-LLM_PROVIDER_OPTIONS = ProviderFactory.get_llm_provider_options()
-SEARCH_PROVIDER_OPTIONS = ProviderFactory.get_search_provider_options()
-LLM_PROVIDER_MAP: Dict[str, Dict[str, Any]] = {option["id"]: option for option in LLM_PROVIDER_OPTIONS}
-SEARCH_PROVIDER_MAP: Dict[str, Dict[str, Any]] = {option["id"]: option for option in SEARCH_PROVIDER_OPTIONS}
-
-
-def _build_choice_label(option: Dict[str, Any]) -> str:
-    status = "Hazır" if option.get("available") else "API anahtarı gerekli"
-    return f"{option['name']} · {status}"
-
-
-LLM_CHOICES: List[tuple[str, str]] = [
-    (_build_choice_label(option), option["id"]) for option in LLM_PROVIDER_OPTIONS
-]
-
-SEARCH_CHOICES: List[tuple[str, str]] = [
-    (_build_choice_label(option), option["id"]) for option in SEARCH_PROVIDER_OPTIONS
-]
-
-
-def build_provider_table_html() -> str:
-    """LLM ve arama sağlayıcıları için bilgilendirici tablo oluştur."""
-
-    def render_section(options: Sequence[Dict[str, Any]]) -> str:
-        rows: List[str] = []
-        for option in options:
-            status_class = "ok" if option.get("available") else "warn"
-            status_label = (
-                "Hazır"
-                if option.get("available")
-                else option.get("availability_message") or "API anahtarı gerekli"
-            )
-
-            description = option.get("description")
-            strengths = option.get("strengths") or []
-            if strengths:
-                strengths_html = "".join(f"<li>{strength}</li>" for strength in strengths)
-            else:
-                strengths_html = "<li>Bilgi bulunmuyor</li>"
-
-            notes_parts: List[str] = []
-            if option.get("default"):
-                notes_parts.append("<span class='note-muted'>Varsayılan kombinasyon</span>")
-
-            docs_url = option.get("docs_url")
-            if docs_url:
-                notes_parts.append(
-                    f"<a href='{docs_url}' target='_blank' rel='noopener noreferrer'>Doküman</a>"
-                )
-
-            required_keys = option.get("required_env_vars") or []
-            if required_keys:
-                notes_parts.append(
-                    "<span class='note-muted'>Gerekli: "
-                    + ", ".join(required_keys)
-                    + "</span>"
-                )
-
-            optional_keys = option.get("optional_env_vars") or []
-            if optional_keys:
-                notes_parts.append(
-                    "<span class='note-muted'>Opsiyonel: "
-                    + ", ".join(optional_keys)
-                    + "</span>"
-                )
-
-            if (not option.get("available")) and option.get("availability_message"):
-                notes_parts.append(
-                    f"<span class='note-muted'>{option['availability_message']}</span>"
-                )
-
-            if not notes_parts:
-                notes_parts.append("<span class='note-muted'>Ek gereksinim yok</span>")
-
-            notes_html = "<br>".join(notes_parts)
-
-            rows.append(
-                "<tr>"
-                + "<td>"
-                + f"<span class='provider-name'>{option['name']}</span>"
-                + f"<span class='status-pill {status_class}'>{status_label}</span>"
-                + (f"<div class='note-muted'>{description}</div>" if description else "")
-                + "</td>"
-                + f"<td><ul>{strengths_html}</ul></td>"
-                + f"<td>{notes_html}</td>"
-                + "</tr>"
-            )
-
-        return "".join(rows)
-
-    html_parts: List[str] = ["<div class='status-card provider-info'>"]
-    html_parts.append("<h3>⚙️ Sağlayıcı Karşılaştırması</h3>")
-
-    html_parts.append("<div class='provider-section'>")
-    html_parts.append("<h4>LLM Sağlayıcıları</h4>")
-    html_parts.append(
-        "<table class='provider-table'>"
-        "<thead><tr><th>Sağlayıcı</th><th>Güçlü Yönler</th><th>Notlar</th></tr></thead>"
-        "<tbody>"
-    )
-    html_parts.append(render_section(LLM_PROVIDER_OPTIONS))
-    html_parts.append("</tbody></table></div>")
-
-    html_parts.append("<div class='provider-section'>")
-    html_parts.append("<h4>Arama Sağlayıcıları</h4>")
-    html_parts.append(
-        "<table class='provider-table'>"
-        "<thead><tr><th>Sağlayıcı</th><th>Güçlü Yönler</th><th>Notlar</th></tr></thead>"
-        "<tbody>"
-    )
-    html_parts.append(render_section(SEARCH_PROVIDER_OPTIONS))
-    html_parts.append("</tbody></table></div>")
-
-    html_parts.append("</div>")
-    return "".join(html_parts)
-
-# Custom CSS
-CUSTOM_CSS = """
-.main-container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-}
-
-.header-section {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border-radius: 15px;
-    padding: 30px;
-    color: white;
-    margin-bottom: 30px;
-    text-align: center;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-}
-
-.status-card {
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 20px;
-    margin: 15px 0;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-}
-
-.progress-step {
-    display: flex;
-    align-items: center;
-    padding: 10px;
-    margin: 5px 0;
-    border-radius: 8px;
-    transition: all 0.3s ease;
-}
-
-.step-waiting {
-    background: #f1f5f9;
-    color: #64748b;
-}
-
-.step-active {
-    background: #dbeafe;
-    color: #1d4ed8;
-    border-left: 4px solid #3b82f6;
-}
-
-.step-completed {
-    background: #dcfce7;
-    color: #166534;
-    border-left: 4px solid #22c55e;
-}
-
-.step-error {
-    background: #fef2f2;
-    color: #dc2626;
-    border-left: 4px solid #ef4444;
-}
-
-.report-section {
-    background: white;
-    border-radius: 12px;
-    padding: 25px;
-    margin: 20px 0;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    border: 1px solid #e5e7eb;
-}
-
-.download-section {
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
-    border-radius: 10px;
-    padding: 15px;
-    margin: 15px 0;
-}
-
-.error-message {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    border-radius: 8px;
-    padding: 15px;
-    color: #dc2626;
-}
-
-.success-message {
-    background: #f0fdf4;
-    border: 1px solid #bbf7d0;
-    border-radius: 8px;
-    padding: 15px;
-    color: #166534;
-}
-
-.provider-info {
-    margin-top: 10px;
-}
-
-.provider-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 12px;
-}
-
-.provider-table th,
-.provider-table td {
-    border: 1px solid #e2e8f0;
-    padding: 10px 12px;
-    vertical-align: top;
-    font-size: 14px;
-}
-
-.provider-table th {
-    background: #f8fafc;
-    color: #1f2937;
-}
-
-.provider-name {
-    font-weight: 600;
-    display: block;
-    margin-bottom: 6px;
-}
-
-.status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 2px 8px;
-    border-radius: 9999px;
-}
-
-.status-pill.ok {
-    background: rgba(34, 197, 94, 0.12);
-    color: #15803d;
-}
-
-.status-pill.warn {
-    background: rgba(234, 179, 8, 0.12);
-    color: #b45309;
-}
-
-.note-muted {
-    color: #64748b;
-    font-size: 12px;
-    margin-top: 6px;
-}
-"""
-
-class LogCapture(logging.Handler):
-    """Custom logging handler to capture logs for UI"""
-    
-    def emit(self, record):
-        log_entry = self.format(record)
-        _log_queue.put({
-            'timestamp': datetime.now().strftime("%H:%M:%S"),
-            'level': record.levelname,
-            'message': log_entry,
-            'name': record.name
-        })
-
-def setup_logging():
-    """Setup logging to capture system logs"""
-    handler = LogCapture()
-    handler.setFormatter(logging.Formatter('%(message)s'))
-    
-    # Ana logger'lara handler ekle
-    loggers = [
-        'main_report_agent',
-        'researcher_agent', 
-        'writer_agent',
-        'json_parser_fix'
-    ]
-    
-    for logger_name in loggers:
-        logger = logging.getLogger(logger_name)
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-
-def _normalize_search_selection(selection: Optional[Sequence[str]]) -> List[str]:
-    """Kullanıcıdan gelen arama sağlayıcı seçimini normalize et."""
-
-    if selection is None:
-        return list(DEFAULT_SEARCH_PROVIDERS)
-
-    if isinstance(selection, str):
-        normalized = [selection]
-    else:
-        normalized = [str(item) for item in selection if item]
-
-    return normalized or list(DEFAULT_SEARCH_PROVIDERS)
-
-
-def _get_agent(
-    llm_provider_id: Optional[str] = None,
-    search_provider_ids: Optional[Sequence[str]] = None,
-) -> MainReportAgent:
-    """MainReportAgent örneğini tekil olacak şekilde döndür."""
-
-    global _agent, _agent_config
-
-    normalized_llm = llm_provider_id or DEFAULT_LLM_PROVIDER_ID
-    normalized_search = tuple(_normalize_search_selection(search_provider_ids))
-
-    config_signature = {"llm": normalized_llm, "search": normalized_search}
-
-    if _agent is None or _agent_config != config_signature:
-        _agent = MainReportAgent(
-            llm_provider_id=normalized_llm,
-            search_provider_ids=list(normalized_search),
-        )
-        _agent_config = config_signature
-
-    return _agent
-
-
-def _format_provider_display(
-    provider_id: str,
-    provider_map: Dict[str, Dict[str, Any]],
-) -> str:
-    option = provider_map.get(provider_id)
-    if not option:
-        return provider_id
-    status = "✅" if option.get("available") else "⚠️"
-    return f"{status} {option['name']}"
-
-
-def _format_search_display(provider_ids: Sequence[str]) -> str:
-    if not provider_ids:
-        return "-"
-    names = [_format_provider_display(pid, SEARCH_PROVIDER_MAP) for pid in provider_ids]
-    return ", ".join(names)
-
-def _sanitize_topic(topic: str) -> str:
-    """Dosya adı için konu başlığını güvenli formata getir."""
-    safe_chars = [ch if ch.isalnum() else " " for ch in topic.lower()]
-    sanitized = "_".join("".join(safe_chars).split())
-    if not sanitized:
-        sanitized = "rapor"
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{sanitized[:50]}_{timestamp}.md"
-
-def create_progress_steps():
-    """Progress adımlarını oluştur"""
-    steps = [
-        {"id": "init", "text": "🚀 Sistem hazırlanıyor", "status": "waiting"},
-        {"id": "research", "text": "🔍 Web araştırması yapılıyor", "status": "waiting"},
-        {"id": "planning", "text": "📋 Rapor yapısı planlanıyor", "status": "waiting"},
-        {"id": "writing", "text": "✍️ Bölümler yazılıyor", "status": "waiting"},
-        {"id": "compiling", "text": "⚙️ Final rapor derleniyor", "status": "waiting"},
-        {"id": "saving", "text": "💾 Rapor kaydediliyor", "status": "waiting"}
-    ]
-    return steps
-
-def update_progress_display(steps):
-    """Progress adımlarını HTML formatında döndür"""
-    html = '<div class="status-card">'
-    html += '<h3>📊 İşlem Durumu</h3>'
-    
-    for step in steps:
-        status_class = f"step-{step['status']}"
-        icon = {
-            'waiting': '⏳',
-            'active': '⚡',
-            'completed': '✅',
-            'error': '❌'
-        }.get(step['status'], '⏳')
-        
-        html += f'''
-        <div class="progress-step {status_class}">
-            <span style="margin-right: 10px;">{icon}</span>
-            <span>{step["text"]}</span>
-        </div>
-        '''
-    
-    html += '</div>'
-    return html
-
-def get_recent_logs(max_logs=10):
-    """Son logları al ve formatla"""
-    logs = []
-    temp_logs = []
-    
-    # Queue'dan tüm logları al
-    while not _log_queue.empty():
-        temp_logs.append(_log_queue.get())
-    
-    # Son N log'u al
-    recent_logs = temp_logs[-max_logs:] if temp_logs else []
-    
-    if not recent_logs:
-        return "Henüz log yok..."
-    
-    html = '<div class="status-card">'
-    html += '<h3>📜 Sistem Logları</h3>'
-    html += '<div style="max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px;">'
-    
-    for log in recent_logs:
-        color = {
-            'INFO': '#22c55e',
-            'WARNING': '#f59e0b', 
-            'ERROR': '#ef4444',
-            'DEBUG': '#6b7280'
-        }.get(log['level'], '#6b7280')
-        
-        html += f'''
-        <div style="margin: 5px 0; padding: 8px; background: #f8fafc; border-radius: 4px; border-left: 3px solid {color};">
-            <span style="color: #64748b;">[{log["timestamp"]}]</span>
-            <span style="color: {color}; font-weight: bold;">{log["level"]}</span>
-            <span style="color: #334155;">: {log["message"]}</span>
-        </div>
-        '''
-    
-    html += '</div></div>'
-    return html
-
-async def run_report(
-    topic: str,
-    llm_provider_id: Optional[str],
-    search_provider_ids: Optional[Sequence[str]],
-):
-    """Gelişmiş rapor oluşturma fonksiyonu"""
-
-    cleaned_topic = (topic or "").strip()
-    selected_llm = llm_provider_id or DEFAULT_LLM_PROVIDER_ID
-    selected_search = _normalize_search_selection(search_provider_ids)
-
-    provider_summary = (
-        f"LLM: {_format_provider_display(selected_llm, LLM_PROVIDER_MAP)}\n"
-        f"Arama: {_format_search_display(selected_search)}"
-    )
-
-    if not cleaned_topic:
-        yield (
-            "❌ Lütfen bir rapor konusu girin.\n" + provider_summary,
-            "",
-            None,
-            update_progress_display(create_progress_steps()),
-            get_recent_logs()
-        )
-        return
-
-    # Progress steps başlat
-    steps = create_progress_steps()
-
-    # Adım 1: Başlatma
-    steps[0]["status"] = "active"
-    yield (
-        "🚀 Sistem başlatılıyor...\n" + provider_summary,
-        "",
-        None,
-        update_progress_display(steps),
-        get_recent_logs()
-    )
-
-    try:
-        agent = _get_agent(selected_llm, selected_search)
-        steps[0]["status"] = "completed"
-
-        # Adım 2: Araştırma
-        steps[1]["status"] = "active"
-        yield (
-            "🔍 Web araştırması başladı...",
-            "",
-            None,
-            update_progress_display(steps),
-            get_recent_logs()
-        )
-
-        # Rapor oluşturma - log takibi için
-        start_time = time.time()
-        report = await agent.generate_report(cleaned_topic)
-
-        if not report or report.strip().lower().startswith("hata"):
-            # Hata durumu
-            for step in steps:
-                if step["status"] == "active":
-                    step["status"] = "error"
-
-            error_msg = report if report else "Rapor oluşturulamadı. Lütfen tekrar deneyin."
-            yield (
-                f"❌ {error_msg}",
-                "",
-                None,
-                update_progress_display(steps),
-                get_recent_logs()
-            )
-            return
-
-        # Tüm adımları tamamlandı olarak işaretle
-        for step in steps[:-1]:  # Son adım hariç
-            step["status"] = "completed"
-
-        steps[-1]["status"] = "active"  # Kaydetme adımı
-        yield (
-            "💾 Rapor kaydediliyor...",
-            report,
-            None,
-            update_progress_display(steps),
-            get_recent_logs()
-        )
-
-        # Dosya kaydetme
-        filename = _sanitize_topic(cleaned_topic)
-        filepath = await agent.save_report(report, filename=filename)
-
-        steps[-1]["status"] = "completed"
-
-        # Başarılı tamamlama
-        elapsed_time = time.time() - start_time
-        success_message = f"✅ Rapor başarıyla oluşturuldu! ({elapsed_time:.1f} saniye)"
-
-        if filepath:
-            success_message += f"\n📁 Dosya: {os.path.basename(filepath)}"
-
-        yield (
-            success_message,
-            report,
-            filepath if filepath else None,
-            update_progress_display(steps),
-            get_recent_logs()
-        )
-
-    except Exception as e:
-        # Genel hata yakalama
-        for step in steps:
-            if step["status"] == "active":
-                step["status"] = "error"
-
-        error_message = f"❌ Beklenmeyen hata: {str(e)}"
-        yield (
-            error_message,
-            "",
-            None,
-            update_progress_display(steps),
-            get_recent_logs()
-        )
-
-def build_interface() -> gr.Blocks:
-    """Gelişmiş Gradio arayüzü oluştur"""
-    
-    with gr.Blocks(title="NVIDIA Rapor Ajanı", css=CUSTOM_CSS, theme=gr.themes.Soft()) as demo:
-
-        # Ana başlık
-        gr.HTML("""
-        <div class="header-section">
+from textwrap import dedent
+
+HTML_CONTENT = dedent(
+    """
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            padding: 40px;
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 15px 35px rgba(102, 126, 234, 0.3);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        /* Main Content Grid */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        /* Input Section */
+        .input-section {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #2d3748;
+        }
+
+        .dropdown-select, .text-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        .dropdown-select:focus, .text-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            outline: none;
+        }
+
+        .text-input {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .generate-btn {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .generate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        /* Provider Info - Compact */
+        .provider-info-compact {
+            background: white;
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            height: fit-content;
+        }
+
+        .provider-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            padding: 10px;
+            border-radius: 8px;
+            transition: background 0.2s ease;
+        }
+
+        .provider-toggle:hover {
+            background: #f8fafc;
+        }
+
+        .provider-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+        }
+
+        .provider-content.expanded {
+            max-height: 800px;
+        }
+
+        .provider-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .provider-card {
+            background: #f8fafc;
+            border-radius: 10px;
+            padding: 15px;
+            border-left: 4px solid #667eea;
+        }
+
+        .provider-name {
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 5px;
+        }
+
+        .provider-status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .status-ready {
+            background: rgba(34, 197, 94, 0.1);
+            color: #15803d;
+        }
+
+        .status-needs-key {
+            background: rgba(234, 179, 8, 0.1);
+            color: #b45309;
+        }
+
+        .provider-features {
+            list-style: none;
+            font-size: 13px;
+            color: #64748b;
+        }
+
+        .provider-features li {
+            margin-bottom: 3px;
+        }
+
+        .provider-features li::before {
+            content: "• ";
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        /* Status Panel */
+        .status-panel {
+            background: white;
+            border-radius: 16px;
+            padding: 25px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .progress-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .progress-steps, .logs-panel {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .step {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .step-waiting {
+            background: #f1f5f9;
+            color: #64748b;
+        }
+
+        .step-active {
+            background: #dbeafe;
+            color: #1d4ed8;
+            border-left: 4px solid #3b82f6;
+        }
+
+        .step-completed {
+            background: #dcfce7;
+            color: #166534;
+            border-left: 4px solid #22c55e;
+        }
+
+        .step-error {
+            background: #fef2f2;
+            color: #dc2626;
+            border-left: 4px solid #ef4444;
+        }
+
+        .step-icon {
+            margin-right: 12px;
+            font-size: 16px;
+        }
+
+        /* Examples Section */
+        .examples {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 25px;
+        }
+
+        .examples h4 {
+            margin-bottom: 15px;
+            color: #2d3748;
+        }
+
+        .example-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .example-chip {
+            background: #f0f9ff;
+            color: #0369a1;
+            padding: 8px 12px;
+            border-radius: 20px;
+            border: 1px solid #bae6fd;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+
+        .example-chip:hover {
+            background: #0369a1;
+            color: white;
+        }
+
+        /* Report Output */
+        .report-output {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+            margin-top: 30px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .progress-container {
+                grid-template-columns: 1fr;
+            }
+
+            .provider-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+
+        /* Animations */
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: slideIn 0.6s ease-out;
+        }
+    </style>
+    <div class="container">
+        <div class="header animate-in">
             <h1>🧠 NVIDIA Rapor Ajanı</h1>
             <p>Yapay zeka destekli araştırma ve rapor oluşturma sistemi</p>
-            <p><em>Web araştırması yaparak kapsamlı Markdown raporları oluşturur</em></p>
         </div>
-        """)
+        <div class="main-grid">
+            <div class="input-section animate-in">
+                <div class="form-group">
+                    <label>🧠 LLM Sağlayıcısı</label>
+                    <select class="dropdown-select">
+                        <option>OpenRouter · NVIDIA Nemotron · Hazır</option>
+                        <option>OpenAI · GPT-4o · API anahtarı gerekli</option>
+                        <option>Anthropic · Claude 3 · API anahtarı gerekli</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>🔎 Arama Sağlayıcıları</label>
+                    <select class="dropdown-select" multiple>
+                        <option selected>Tavily Search · Hazır</option>
+                        <option>Exa Semantic Search · API anahtarı gerekli</option>
+                        <option>SerpAPI Google Search · API anahtarı gerekli</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>📝 Rapor Konusu</label>
+                    <textarea class="text-input" placeholder="Örn. 'Yapay zeka ajanlarının sağlık sektöründeki uygulamaları'"></textarea>
+                </div>
+                <button class="generate-btn">🚀 Rapor Oluştur</button>
+                <div class="examples">
+                    <h4>💡 Örnek Konular</h4>
+                    <div class="example-chips">
+                        <span class="example-chip">AI müşteri hizmetleri</span>
+                        <span class="example-chip">Dijital ikiz uygulamaları</span>
+                        <span class="example-chip">Finans sektöründe LLM</span>
+                        <span class="example-chip">Endüstri 4.0 IoT</span>
+                        <span class="example-chip">Blockchain tedarik zinciri</span>
+                    </div>
+                </div>
+            </div>
+            <div class="provider-info-compact animate-in">
+                <div class="provider-toggle" onclick="toggleProviders()">
+                    <h3>⚙️ Sağlayıcı Detayları</h3>
+                    <span id="toggle-icon">▼</span>
+                </div>
+                <div class="provider-content" id="provider-content">
+                    <div class="provider-grid">
+                        <div class="provider-card">
+                            <div class="provider-name">NVIDIA Nemotron</div>
+                            <span class="provider-status status-ready">✅ Hazır</span>
+                            <ul class="provider-features">
+                                <li>Open-source model</li>
+                                <li>Türkçe desteği</li>
+                                <li>Uygun maliyet</li>
+                            </ul>
+                        </div>
+                        <div class="provider-card">
+                            <div class="provider-name">Tavily Search</div>
+                            <span class="provider-status status-ready">✅ Hazır</span>
+                            <ul class="provider-features">
+                                <li>Otomatik özet</li>
+                                <li>Hızlı yanıt</li>
+                                <li>AI-optimize</li>
+                            </ul>
+                        </div>
+                        <div class="provider-card">
+                            <div class="provider-name">OpenAI GPT-4</div>
+                            <span class="provider-status status-needs-key">⚠️ API Key</span>
+                            <ul class="provider-features">
+                                <li>Üstün muhakeme</li>
+                                <li>Geniş entegrasyon</li>
+                                <li>Çok dilli</li>
+                            </ul>
+                        </div>
+                        <div class="provider-card">
+                            <div class="provider-name">EXA Semantic</div>
+                            <span class="provider-status status-needs-key">⚠️ API Key</span>
+                            <ul class="provider-features">
+                                <li>Semantik arama</li>
+                                <li>Kaynak çeşitliliği</li>
+                                <li>Autoprompt</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="status-panel">
+            <div class="progress-container">
+                <div class="progress-steps">
+                    <h4>📊 İşlem Durumu</h4>
+                    <div class="step step-waiting">
+                        <span class="step-icon">⏳</span>
+                        <span>Sistem hazırlanıyor</span>
+                    </div>
+                    <div class="step step-waiting">
+                        <span class="step-icon">⏳</span>
+                        <span>Web araştırması yapılıyor</span>
+                    </div>
+                    <div class="step step-waiting">
+                        <span class="step-icon">⏳</span>
+                        <span>Rapor yapısı planlanıyor</span>
+                    </div>
+                    <div class="step step-waiting">
+                        <span class="step-icon">⏳</span>
+                        <span>Bölümler yazılıyor</span>
+                    </div>
+                    <div class="step step-waiting">
+                        <span class="step-icon">⏳</span>
+                        <span>Final rapor derleniyor</span>
+                    </div>
+                </div>
+                <div class="logs-panel">
+                    <h4>📜 Sistem Logları</h4>
+                    <div style="color: #64748b; font-size: 14px; font-family: monospace;">
+                        Henüz log yok...
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="report-output">
+            <h3>📄 Oluşturulan Rapor</h3>
+            <p style="color: #64748b; margin-top: 10px;">
+                Rapor oluşturmak için bir konu girin ve 'Rapor Oluştur' butonuna tıklayın.
+            </p>
+        </div>
+    </div>
+    <script>
+        function toggleProviders() {
+            const content = document.getElementById('provider-content');
+            const icon = document.getElementById('toggle-icon');
 
-        gr.HTML(build_provider_table_html())
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                icon.textContent = '▼';
+            } else {
+                content.classList.add('expanded');
+                icon.textContent = '▲';
+            }
+        }
 
-        with gr.Row():
-            with gr.Column(scale=2):
-                # Giriş bölümü
-                with gr.Group():
-                    llm_dropdown = gr.Dropdown(
-                        choices=LLM_CHOICES,
-                        value=DEFAULT_LLM_PROVIDER_ID,
-                        label="🧠 LLM Sağlayıcısı",
-                        info="Raporun yazımında kullanılacak büyük dil modelini seçin.",
-                    )
+        document.querySelectorAll('.example-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                document.querySelector('.text-input').value = chip.textContent;
+            });
+        });
 
-                    search_dropdown = gr.Dropdown(
-                        choices=SEARCH_CHOICES,
-                        value=list(DEFAULT_SEARCH_PROVIDERS),
-                        label="🔎 Arama Sağlayıcıları",
-                        info="Bir veya birden fazla web arama sağlayıcısı seçin.",
-                        multiselect=True,
-                    )
+        function simulateProgress() {
+            const steps = document.querySelectorAll('.step');
+            let current = 0;
 
-                    topic_input = gr.Textbox(
-                        label="📝 Rapor Konusu",
-                        placeholder="Örn. 'Yapay zeka ajanlarının sağlık sektöründeki uygulamaları'",
-                        lines=2,
-                        max_lines=3
-                    )
-                    
-                    generate_button = gr.Button(
-                        "🚀 Rapor Oluştur", 
-                        variant="primary", 
-                        size="lg"
-                    )
-                
-                # Örnek konular
-                gr.Examples(
-                    label="💡 Örnek Konular",
-                    examples=[
-                        "Yapay zeka destekli müşteri hizmetleri çözümleri",
-                        "Sürdürülebilir enerji yönetiminde dijital ikiz uygulamaları", 
-                        "Finans sektöründe büyük dil modellerinin kullanımı",
-                        "Endüstri 4.0 ve IoT sensörlerin üretim optimizasyonu",
-                        "Blockchain teknolojisinin tedarik zinciri yönetimindeki rolü"
-                    ],
-                    inputs=topic_input
-                )
-            
-            with gr.Column(scale=1):
-                # Durum takibi
-                progress_display = gr.HTML(
-                    update_progress_display(create_progress_steps()),
-                    label="📊 İşlem Durumu"
-                )
-                
-                # Log görüntüleyici
-                log_display = gr.HTML(
-                    get_recent_logs(),
-                    label="📜 Sistem Logları"
-                )
-        
-        # Sonuç bölümü
-        with gr.Row():
-            with gr.Column():
-                status_message = gr.Markdown(
-                    "Rapor oluşturmak için bir konu girin ve 'Rapor Oluştur' butonuna tıklayın.",
-                    label="📋 Durum"
-                )
-        
-        with gr.Row():
-            with gr.Column():
-                report_output = gr.Markdown(
-                    label="📄 Oluşturulan Rapor",
-                    elem_classes=["report-section"]
-                )
-                
-                download_output = gr.File(
-                    label="💾 Raporu İndir",
-                    visible=False,
-                    elem_classes=["download-section"]
-                )
-        
-        # Event handlers
-        def update_ui_periodically():
-            """UI'yi periyodik olarak güncelle"""
-            return get_recent_logs()
-        
-        # Otomatik log güncellemesi
-        demo.load(
-            update_ui_periodically,
-            outputs=log_display
-        )
+            const interval = setInterval(() => {
+                if (current > 0) {
+                    steps[current - 1].className = 'step step-completed';
+                    steps[current - 1].querySelector('.step-icon').textContent = '✅';
+                }
 
-        # Gradio 5.0+ Timer bileşeni "interval" yerine "value" parametresi kullanıyor.
-        # Daha eski sürümlerde de geriye dönük uyumluluk sağlamak için değer parametresi
-        # saniye cinsinden ayarlanıyor.
-        log_timer = gr.Timer(value=2)
-        log_timer.tick(
-            update_ui_periodically,
-            outputs=log_display
-        )
-        
-        # Buton ve enter tuşu olayları
-        generate_button.click(
-            run_report,
-            inputs=[topic_input, llm_dropdown, search_dropdown],
-            outputs=[status_message, report_output, download_output, progress_display, log_display]
-        )
+                if (current < steps.length) {
+                    steps[current].className = 'step step-active';
+                    steps[current].querySelector('.step-icon').textContent = '⚡';
+                    current++;
+                } else {
+                    clearInterval(interval);
+                }
+            }, 1000);
+        }
 
-        topic_input.submit(
-            run_report,
-            inputs=[topic_input, llm_dropdown, search_dropdown],
-            outputs=[status_message, report_output, download_output, progress_display, log_display]
-        )
-        
-        # Dosya indirme durumunu güncelle
-        def update_download_visibility(file_path):
-            if file_path:
-                return gr.update(visible=True, value=file_path)
-            return gr.update(visible=False)
-        
-        download_output.change(
-            update_download_visibility,
-            inputs=download_output,
-            outputs=download_output
-        )
+        document.querySelector('.generate-btn').addEventListener('click', simulateProgress);
+    </script>
+    """
+)
 
+
+def build_interface() -> gr.Blocks:
+    with gr.Blocks(title="NVIDIA Rapor Ajanı - İyileştirilmiş UI") as demo:
+        gr.HTML(HTML_CONTENT)
     return demo
 
+
 def launch():
-    """Gelişmiş arayüzü başlat"""
-    
-    # Logging setup
-    setup_logging()
-    
-    print("🚀 NVIDIA Rapor Ajanı başlatılıyor...")
-    print("📋 Özellikler:")
-    print("   - Real-time progress tracking")
-    print("   - Modern UI tasarımı") 
-    print("   - Sistem log görüntüleme")
-    print("   - Gelişmiş hata yönetimi")
-    print("   - Otomatik dosya kaydetme")
-    
     demo = build_interface()
-    
-    # Queue ayarları
-    queue_kwargs = {}
-    queue_params = inspect.signature(gr.Blocks.queue).parameters
-    
-    if "default_concurrency_limit" in queue_params:
-        queue_kwargs["default_concurrency_limit"] = 1
-    elif "concurrency_count" in queue_params:
-        queue_kwargs["concurrency_count"] = 1
-    
-    print("\n🌐 Arayüz açılıyor...")
-    demo.queue(**queue_kwargs).launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        share=False,
-        inbrowser=True
-    )
+    demo.launch(server_name="127.0.0.1", server_port=7860, share=False, inbrowser=True)
+
 
 if __name__ == "__main__":
     launch()

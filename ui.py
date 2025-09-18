@@ -21,11 +21,10 @@ import gradio as gr
 from dotenv import load_dotenv
 
 from main_report_agent import MainReportAgent
+from provider_manager import ProviderFactory
 from report_agent_setup import (
     DEFAULT_LLM_PROVIDER_ID,
     DEFAULT_SEARCH_PROVIDERS,
-    get_llm_provider_options,
-    get_search_provider_options,
 )
 
 # Ortam değişkenlerini yükle
@@ -37,8 +36,8 @@ _agent_config: Optional[Dict[str, Sequence[str]]] = None
 _log_queue = Queue()
 
 
-LLM_PROVIDER_OPTIONS = get_llm_provider_options()
-SEARCH_PROVIDER_OPTIONS = get_search_provider_options()
+LLM_PROVIDER_OPTIONS = ProviderFactory.get_llm_provider_options()
+SEARCH_PROVIDER_OPTIONS = ProviderFactory.get_search_provider_options()
 LLM_PROVIDER_MAP: Dict[str, Dict[str, Any]] = {option["id"]: option for option in LLM_PROVIDER_OPTIONS}
 SEARCH_PROVIDER_MAP: Dict[str, Dict[str, Any]] = {option["id"]: option for option in SEARCH_PROVIDER_OPTIONS}
 

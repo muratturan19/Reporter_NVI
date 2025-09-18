@@ -14,9 +14,8 @@ from langgraph.graph import StateGraph, START, END
 import logging
 
 # Diğer modüllerden import
+from provider_manager import ProviderFactory
 from report_agent_setup import (
-    create_llm,
-    create_search_tool,
     Section,
     ReportStructure,
     DEFAULT_LLM_PROVIDER_ID,
@@ -221,8 +220,8 @@ class MainReportAgent:
         )
 
         # Model ve araçları başlat
-        self.llm = create_llm(self.llm_provider_id)
-        self.search_tool = create_search_tool(self.search_provider_ids)
+        self.llm = ProviderFactory.create_llm(self.llm_provider_id)
+        self.search_tool = ProviderFactory.create_search_tool(self.search_provider_ids)
 
         logger.info(
             "LLM sağlayıcısı: %s | Arama sağlayıcıları: %s",

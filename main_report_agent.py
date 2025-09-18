@@ -6,7 +6,7 @@ Ana Rapor Ajanı - Tüm bileşenleri birleştiren tam sistem
 import asyncio
 import json
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TypedDict
 from dataclasses import dataclass
 from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
@@ -55,15 +55,15 @@ Araştırma Verileri:
 Bu bilgileri kullanarak 4-6 bölümden oluşan kapsamlı bir rapor yapısı oluştur. JSON formatında yanıtla.
 """
 
-class ReportAgentState:
+class ReportAgentState(TypedDict, total=False):
     """Ana rapor ajan durumu"""
-    def __init__(self):
-        self.topic: str = ""
-        self.research_data: str = ""
-        self.report_structure: Optional[ReportStructure] = None
-        self.sections_content: List[str] = []
-        self.final_report: str = ""
-        self.messages: List[Any] = []
+
+    topic: str
+    research_data: str
+    report_structure: Optional[ReportStructure]
+    sections_content: List[str]
+    final_report: str
+    messages: List[Any]
 
 class MainReportAgent:
     """Ana Rapor Ajan Sınıfı - Tüm sistemi yönetir"""
@@ -93,36 +93,39 @@ class MainReportAgent:
         async def initial_research(state: ReportAgentState):
             """İlk araştırma"""
             logger.info("İlk araştırma başlatılıyor...")
-            
+
             research_result = await self.researcher.research(
-                topic=state.topic,
+                topic=state["topic"],
                 number_of_queries=4
             )
-            
+
             # Araştırma verilerini topla
             research_content = ""
             for message in research_result["messages"]:
                 if hasattr(message, 'content') and message.content:
                     if "ARAŞTIRMA SONUÇLARI" in str(message.content):
                         research_content += str(message.content) + "\n\n"
-            
-            state.research_data = research_content
-            state.messages.extend(research_result["messages"])
-            
+
+            messages = list(state.get("messages", []))
+            messages.extend(research_result["messages"])
+
             logger.info("İlk araştırma tamamlandı")
-            return state
+            return {
+                "research_data": research_content,
+                "messages": messages,
+            }
         
         async def plan_report(state: ReportAgentState):
             """Rapor yapısını planla"""
             logger.info("Rapor planlanıyor...")
             
             messages = self.planner_prompt.format_messages(
-                topic=state.topic,
-                research_data=state.research_data[:2000]  # İlk 2000 karakter
+                topic=state["topic"],
+                research_data=state.get("research_data", "")[:2000]  # İlk 2000 karakter
             )
-            
+
             response = await self.llm.ainvoke(messages)
-            
+
             try:
                 # JSON yanıtını parse et
                 json_start = response.content.find('{')
@@ -139,71 +142,71 @@ class MainReportAgent:
                         research=section_data.get("research", False)
                     ))
                 
-                state.report_structure = ReportStructure(
+                report_structure = ReportStructure(
                     title=plan_data["title"],
                     sections=sections
                 )
-                
+
                 logger.info(f"Rapor planlandı: {len(sections)} bölüm")
-                
+
             except (json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Rapor planlama hatası: {e}")
                 # Varsayılan yapı oluştur
-                state.report_structure = ReportStructure(
-                    title=f"{state.topic} Raporu",
+                report_structure = ReportStructure(
+                    title=f"{state.get('topic', 'Genel')} Raporu",
                     sections=[
                         Section("Giriş", "Konuya genel bakış", False),
                         Section("Detaylar", "Konunun detaylı analizi", True),
                         Section("Sonuç", "Bulgular ve öneriler", False)
                     ]
                 )
-            
-            return state
+
+            return {"report_structure": report_structure}
         
         async def write_sections(state: ReportAgentState):
             """Tüm bölümleri yaz"""
             logger.info("Bölümler yazılıyor...")
             
-            if not state.report_structure:
+            report_structure = state.get("report_structure")
+
+            if not report_structure:
                 logger.error("Rapor yapısı bulunamadı!")
-                return state
-            
+                return {}
+
             sections_content = []
-            
-            for i, section in enumerate(state.report_structure.sections, 1):
+
+            for i, section in enumerate(report_structure.sections, 1):
                 logger.info(f"Bölüm yazılıyor: {section.name}")
-                
+
                 content = await self.writer.write_section(
                     section_name=section.name,
                     section_description=section.description,
                     section_index=i,
-                    research_data=state.research_data,
+                    research_data=state.get("research_data", ""),
                     needs_research=section.research
                 )
-                
+
                 sections_content.append(content)
-                
+
                 # Kısa bekleme (rate limiting için)
                 await asyncio.sleep(1)
-            
-            state.sections_content = sections_content
+
             logger.info(f"Tüm bölümler yazıldı: {len(sections_content)} bölüm")
-            
-            return state
+
+            return {"sections_content": sections_content}
         
         async def compile_final_report(state: ReportAgentState):
             """Final raporu derle"""
             logger.info("Final rapor derleniyor...")
             
             final_report = await self.compiler.compile_report(
-                topic=state.topic,
-                sections=state.sections_content
+                topic=state["topic"],
+                sections=state.get("sections_content", [])
             )
-            
-            state.final_report = final_report
+
             logger.info("Final rapor derlendi")
-            
-            return state
+
+            return {"final_report": final_report}
         
         # Graf oluştur
         workflow = StateGraph(ReportAgentState)
@@ -227,15 +230,23 @@ class MainReportAgent:
         """Konu hakkında tam rapor oluştur"""
         logger.info(f"Rapor oluşturma başlatılıyor: {topic}")
         
-        state = ReportAgentState()
-        state.topic = topic
-        
+        state: ReportAgentState = {
+            "topic": topic,
+            "research_data": "",
+            "report_structure": None,
+            "sections_content": [],
+            "final_report": "",
+            "messages": [],
+        }
+
         try:
             result = await self.graph.ainvoke(state)
-            
-            if result.final_report:
+
+            final_report = result.get("final_report")
+
+            if final_report:
                 logger.info("Rapor başarıyla oluşturuldu")
-                return result.final_report
+                return final_report
             else:
                 logger.error("Rapor oluşturulamadı")
                 return "Rapor oluşturulurken bir hata oluştu."

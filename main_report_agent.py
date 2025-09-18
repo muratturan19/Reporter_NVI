@@ -35,15 +35,66 @@ def _normalize_plan_response(data: Any) -> Any:
         return normalized
     if isinstance(data, list):
         return [_normalize_plan_response(item) for item in data]
+    if isinstance(data, str):
+        text = data.strip()
+
+        # Kod bloğu işaretlerini temizle (```json ... ```)
+        if text.startswith("```") and text.endswith("```"):
+            inner = text[3:-3].strip()
+            first_newline = inner.find("\n")
+            if first_newline != -1:
+                first_line = inner[:first_newline].strip().lower()
+                if first_line in {"json", "jsonc"}:
+                    inner = inner[first_newline + 1 :]
+            text = inner.strip()
+
+        # JSON olarak tekrar parse etmeyi dene (ör. çift tırnaklı string çıktısı)
+        if (text.startswith("{") and text.endswith("}")) or (
+            text.startswith("[") and text.endswith("]")
+        ):
+            try:
+                reparsed = json.loads(text)
+            except json.JSONDecodeError:
+                return text
+            else:
+                return _normalize_plan_response(reparsed)
+
+        return text
     return data
 
 
-def _get_first_value(data: Dict[str, Any], keys: List[str]) -> Optional[Any]:
+def _normalize_key_name(key: Any) -> Optional[str]:
+    """Anahtar isimlerini güvenli şekilde normalize et."""
+
+    if not isinstance(key, str):
+        return None
+    return key.strip().strip('"').strip("'").lower()
+
+
+def _get_first_value(data: Any, keys: List[str]) -> Optional[Any]:
     """Verilen anahtar listesinden ilk mevcut değeri döndür."""
 
-    for key in keys:
-        if key in data and data[key]:
-            return data[key]
+    if isinstance(data, dict):
+        normalized_map: Dict[str, Any] = {}
+        for raw_key, value in data.items():
+            normalized_key = _normalize_key_name(raw_key)
+            if normalized_key is None:
+                continue
+            if normalized_key not in normalized_map:
+                normalized_map[normalized_key] = value
+
+        for key in keys:
+            lookup_key = _normalize_key_name(key)
+            if not lookup_key:
+                continue
+            value = normalized_map.get(lookup_key)
+            if value not in (None, ""):
+                return value
+    elif isinstance(data, list):
+        for item in data:
+            value = _get_first_value(item, keys)
+            if value not in (None, ""):
+                return value
     return None
 
 
@@ -78,6 +129,15 @@ def _parse_section_entry(entry: Any) -> Optional[Section]:
         text = entry.strip()
         if not text:
             return None
+        if (text.startswith("{") and text.endswith("}")) or (
+            text.startswith("[") and text.endswith("]")
+        ):
+            try:
+                parsed_entry = json.loads(text)
+            except json.JSONDecodeError:
+                parsed_entry = None
+            if parsed_entry is not None:
+                return _parse_section_entry(parsed_entry)
         if ":" in text:
             name, desc = text.split(":", 1)
         elif " - " in text:
@@ -228,9 +288,21 @@ class MainReportAgent:
                     plan_data,
                     ["title", "rapor başlığı", "rapor_baslığı", "rapor basligi", "başlık"],
                 )
-                raw_sections = plan_data.get("sections") or plan_data.get("bölümler")
 
-                if not title or not isinstance(raw_sections, list):
+                if isinstance(title, (list, dict)):
+                    title = _get_first_value(title, ["title", "name", "başlık"])
+                if isinstance(title, (int, float)):
+                    title = str(title)
+                if isinstance(title, str):
+                    title = title.strip().strip('"').strip("'")
+
+                raw_sections = plan_data.get("sections") or plan_data.get("bölümler")
+                raw_sections = _normalize_plan_response(raw_sections)
+
+                if isinstance(raw_sections, dict):
+                    raw_sections = list(raw_sections.values())
+
+                if not isinstance(raw_sections, list):
                     raise ValueError("Plan çıktısı beklenen alanları içermiyor")
 
                 sections: List[Section] = []
@@ -245,7 +317,7 @@ class MainReportAgent:
                 state.report_structure = ReportStructure(title=title, sections=sections)
                 logger.info(f"Rapor planlandı: {len(sections)} bölüm")
 
-            except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
+            except Exception as e:
                 logger.error(f"Rapor planlama hatası: {e}")
                 # Varsayılan yapı oluştur
                 state.report_structure = ReportStructure(

@@ -29,6 +29,9 @@ python-dateutil>=2.8.0
 # For Windows UTF-8 support
 colorama>=0.4.6
 
+# Web arayüzü
+gradio>=4.0.0
+
 # Optional: For better error handling
 tenacity>=8.0.0
 

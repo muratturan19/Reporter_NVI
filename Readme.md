@@ -109,6 +109,26 @@ Program başladığında:
    - Final raporu derler
 3. Raporu kaydetme seçeneği sunar
 
+### Web Arayüzü (Gradio)
+
+Tarayıcı üzerinden konu girip rapor çıktısını görmek için Gradio tabanlı
+arayüzü kullanabilirsiniz:
+
+```bash
+python ui.py
+```
+
+Komut sonrasında konsolda verilen URL'yi ziyaret ederek şu özelliklere
+ulaşabilirsiniz:
+
+- Konu başlığını metin kutusuna girme veya örneklerden seçme
+- Oluşan raporu Markdown formatında görüntüleme
+- Raporu otomatik kaydedilen `.md` dosyası olarak indirme
+- Süreç hakkında durum mesajlarını takip etme
+
+> Not: Arayüzün çalışması için `.env` dosyanızda OpenRouter ve Tavily API
+> anahtarları bulunmalıdır.
+
 ### Programmatik Kullanım
 
 ```python

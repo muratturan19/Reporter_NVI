@@ -164,14 +164,14 @@ async def search_web(
     max_results: int = None
 ) -> str:
     """Web'de arama yap.
-    
+
     Args:
-        queries: Arama sorguları listesi
-        topic: Arama konusu türü
-        max_results: Maksimum sonuç sayısı (None ise .env'den alır)
-        
+        queries (List[str]): Arama sorguları listesi.
+        topic (Literal["general", "news", "finance"]): Arama konusu türü.
+        max_results (Optional[int]): Maksimum sonuç sayısı. ``None`` ise .env'den alınır.
+
     Returns:
-        Arama sonuçları string formatında
+        str: Arama sonuçları string formatında.
     """
     
     if not TAVILY_API_KEY:

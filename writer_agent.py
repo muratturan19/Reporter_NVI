@@ -4,7 +4,7 @@ Yazar Ajan - Araştırma verilerini kullanarak rapor bölümleri yazar
 """
 
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TypedDict
 from dataclasses import dataclass
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -55,16 +55,15 @@ Bölüm açıklaması: {section_description}
 Bu bölüm için 2-3 spesifik web arama sorgusu oluştur. Sorgular bu bölümün içeriğini destekleyecek detaylı bilgileri hedeflemeli.
 """
 
-@dataclass
-class SectionWriterState:
-    """Bölüm yazar durumu"""
+# TypedDict kullanarak LangGraph uyumlu state
+class SectionWriterState(TypedDict, total=False):
     section_name: str
     section_description: str
     section_index: int
-    research_data: Optional[str] = None
-    additional_research: Optional[str] = None
-    content: str = ""
-    needs_research: bool = False
+    research_data: Optional[str]
+    additional_research: Optional[str]
+    content: str
+    needs_research: bool
 
 class WriterAgent:
     """Yazar Ajan Sınıfı"""
@@ -93,63 +92,89 @@ class WriterAgent:
         
         async def check_research_need(state: SectionWriterState):
             """Ek araştırma gerekip gerekmediğini kontrol et"""
-            logger.info(f"Araştırma ihtiyacı kontrol ediliyor: {state.section_name}")
+            section_name = state.section_name if hasattr(state, 'section_name') else state.get('section_name', 'Bilinmeyen')
+            logger.info(f"Araştırma ihtiyacı kontrol ediliyor: {section_name}")
             
-            if state.needs_research and not state.additional_research:
+            needs_research = state.needs_research if hasattr(state, 'needs_research') else state.get('needs_research', False)
+            additional_research = state.additional_research if hasattr(state, 'additional_research') else state.get('additional_research')
+            
+            if needs_research and not additional_research:
                 return "research"
             else:
                 return "write"
         
-        async def do_additional_research(state: SectionWriterState):
+        async def do_additional_research(state):
             """Bölüm için ek araştırma yap"""
-            logger.info(f"Ek araştırma yapılıyor: {state.section_name}")
+            section_name = state.section_name if hasattr(state, 'section_name') else state.get('section_name', 'Bilinmeyen')
+            section_description = state.section_description if hasattr(state, 'section_description') else state.get('section_description', '')
+            
+            logger.info(f"Ek araştırma yapılıyor: {section_name}")
             
             # Araştırma sorgularını oluştur
             research_messages = self.research_prompt.format_messages(
-                section_name=state.section_name,
-                section_description=state.section_description
+                section_name=section_name,
+                section_description=section_description
             )
             
             response = await self.llm_with_tools.ainvoke(research_messages)
             
             # Eğer araç çağrısı varsa çalıştır
+            additional_research = ""
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 for tool_call in response.tool_calls:
                     if tool_call['name'] == 'search_web':
                         import json
                         args = json.loads(tool_call['args'])
                         search_result = await self.search_tool.ainvoke(args)
-                        
-                        # Ek araştırma verilerini birleştir
-                        existing_research = state.additional_research or ""
-                        state.additional_research = existing_research + "\n\n" + search_result
+                        additional_research += "\n\n" + search_result
             
-            return state
+            # State güncelle
+            if hasattr(state, '__dict__'):
+                state.additional_research = (state.additional_research or "") + additional_research
+                return state
+            else:
+                updated_state = dict(state)
+                updated_state['additional_research'] = updated_state.get('additional_research', '') + additional_research
+                return updated_state
         
-        async def write_section(state: SectionWriterState):
+        async def write_section(state):
             """Bölümü yaz"""
-            logger.info(f"Bölüm yazılıyor: {state.section_name}")
+            section_name = state.section_name if hasattr(state, 'section_name') else state.get('section_name', 'Bilinmeyen')
+            section_description = state.section_description if hasattr(state, 'section_description') else state.get('section_description', '')
+            section_index = state.section_index if hasattr(state, 'section_index') else state.get('section_index', 1)
+            research_data = state.research_data if hasattr(state, 'research_data') else state.get('research_data', '')
+            additional_research = state.additional_research if hasattr(state, 'additional_research') else state.get('additional_research', '')
+            
+            logger.info(f"Bölüm yazılıyor: {section_name}")
             
             # Tüm araştırma verilerini birleştir
             all_research = ""
-            if state.research_data:
-                all_research += state.research_data
-            if state.additional_research:
-                all_research += "\n\n=== EK ARAŞTIRMA ===\n" + state.additional_research
+            if research_data:
+                all_research += research_data
+            if additional_research:
+                all_research += "\n\n=== EK ARAŞTIRMA ===\n" + additional_research
             
             # Yazma promptunu hazırla
             writer_messages = self.writer_prompt.format_messages(
-                section_name=state.section_name,
-                section_description=state.section_description,
-                section_index=state.section_index,
+                section_name=section_name,
+                section_description=section_description,
+                section_index=section_index,
                 research_data=all_research or "Mevcut araştırma verisi yok."
             )
             
             response = await self.llm.ainvoke(writer_messages)
-            state.content = response.content
+            content = response.content
             
-            logger.info(f"Bölüm tamamlandı: {state.section_name}")
-            return state
+            logger.info(f"Bölüm tamamlandı: {section_name}")
+            
+            # State güncelle
+            if hasattr(state, '__dict__'):
+                state.content = content
+                return state
+            else:
+                updated_state = dict(state)
+                updated_state['content'] = content
+                return updated_state
         
         # Graf oluştur
         workflow = StateGraph(SectionWriterState)
@@ -187,18 +212,28 @@ class WriterAgent:
         """Bölüm yaz"""
         logger.info(f"Bölüm yazma başlatılıyor: {section_name}")
         
-        state = SectionWriterState(
-            section_name=section_name,
-            section_description=section_description,
-            section_index=section_index,
-            research_data=research_data,
-            needs_research=needs_research
-        )
+        state: SectionWriterState = {
+            "section_name": section_name,
+            "section_description": section_description,
+            "section_index": section_index,
+            "research_data": research_data,
+            "additional_research": None,
+            "content": "",
+            "needs_research": needs_research
+        }
         
         result = await self.graph.ainvoke(state)
         
         logger.info(f"Bölüm yazma tamamlandı: {section_name}")
-        return result.content
+        
+        # Result'dan content'i al
+        if isinstance(result, dict) and 'content' in result:
+            return result['content']
+        elif hasattr(result, 'content'):
+            return result.content
+        else:
+            logger.error(f"Content bulunamadı. Result tipi: {type(result)}, Keys: {list(result.keys()) if isinstance(result, dict) else 'No keys'}")
+            return f"# {section_name}\n\nBu bölüm oluşturulurken bir hata oluştu."
 
 # Ana rapor derleyici
 class ReportCompiler:

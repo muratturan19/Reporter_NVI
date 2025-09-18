@@ -20,6 +20,84 @@ from writer_agent import WriterAgent, ReportCompiler
 
 logger = logging.getLogger(__name__)
 
+
+def _normalize_plan_response(data: Any) -> Any:
+    """Temiz JSON anahtarları elde etmek için plan çıktısını normalize et."""
+
+    if isinstance(data, dict):
+        normalized: Dict[str, Any] = {}
+        for key, value in data.items():
+            new_key = key
+            if isinstance(key, str):
+                new_key = key.strip().strip('"').strip("'")
+                new_key = new_key.lower()
+            normalized[new_key] = _normalize_plan_response(value)
+        return normalized
+    if isinstance(data, list):
+        return [_normalize_plan_response(item) for item in data]
+    return data
+
+
+def _get_first_value(data: Dict[str, Any], keys: List[str]) -> Optional[Any]:
+    """Verilen anahtar listesinden ilk mevcut değeri döndür."""
+
+    for key in keys:
+        if key in data and data[key]:
+            return data[key]
+    return None
+
+
+def _coerce_bool(value: Any) -> bool:
+    """LLM çıktısından gelen bool değerini normalize et."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized in {"true", "evet", "yes", "1", "doğru"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
+def _parse_section_entry(entry: Any) -> Optional[Section]:
+    """Modelden gelen bölüm verisini Section nesnesine dönüştür."""
+
+    if isinstance(entry, dict):
+        section_data = _normalize_plan_response(entry)
+        name = _get_first_value(section_data, ["name", "title", "başlık", "isim"])
+        description = _get_first_value(
+            section_data,
+            ["description", "açıklama", "aciklama", "summary", "özeti", "özet"],
+        )
+        research_flag = section_data.get("research")
+        if research_flag is None:
+            research_flag = section_data.get("araştırma")
+        research = _coerce_bool(research_flag)
+    elif isinstance(entry, str):
+        text = entry.strip()
+        if not text:
+            return None
+        if ":" in text:
+            name, desc = text.split(":", 1)
+        elif " - " in text:
+            name, desc = text.split(" - ", 1)
+        else:
+            name, desc = text, ""
+        name = name.strip()
+        description = desc.strip()
+        research = False
+    else:
+        return None
+
+    if not name:
+        return None
+
+    if not description:
+        description = "Bu bölüm için açıklama sağlanmadı."
+
+    return Section(name=name, description=description, research=research)
+
 # Planlama promptı
 REPORT_PLANNER_PROMPT = """
 Sen deneyimli bir rapor planlama uzmanısın. Verilen konu ve araştırma verilerini kullanarak detaylı rapor yapısı oluşturuyorsun.
@@ -130,34 +208,45 @@ class MainReportAgent:
                 # JSON yanıtını parse et
                 json_start = response.content.find('{')
                 json_end = response.content.rfind('}') + 1
+
+                if json_start == -1 or json_end <= json_start:
+                    raise ValueError("Geçerli JSON bulunamadı")
+
                 json_str = response.content[json_start:json_end]
-                
-                plan_data = json.loads(json_str)
-                
-                sections = []
-                for section_data in plan_data["sections"]:
-                    sections.append(Section(
-                        name=section_data["name"],
-                        description=section_data["description"],
-                        research=section_data.get("research", False)
-                    ))
-                
-                report_structure = ReportStructure(
-                    title=plan_data["title"],
-                    sections=sections
+                plan_data_raw = json.loads(json_str)
+                plan_data = _normalize_plan_response(plan_data_raw)
+
+                title = _get_first_value(
+                    plan_data,
+                    ["title", "rapor başlığı", "rapor_baslığı", "rapor basligi", "başlık"],
                 )
+                raw_sections = plan_data.get("sections") or plan_data.get("bölümler")
+
+                if not title or not isinstance(raw_sections, list):
+                    raise ValueError("Plan çıktısı beklenen alanları içermiyor")
+
+                sections: List[Section] = []
+                for raw_section in raw_sections:
+                    section = _parse_section_entry(raw_section)
+                    if section:
+                        sections.append(section)
+
+                if not sections:
+                    raise ValueError("Plan çıktısında kullanılabilir bölüm bulunamadı")
+
+                report_structure = ReportStructure(title=title, sections=sections)
 
                 logger.info(f"Rapor planlandı: {len(sections)} bölüm")
 
-            except (json.JSONDecodeError, KeyError) as e:
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
                 logger.error(f"Rapor planlama hatası: {e}")
                 # Varsayılan yapı oluştur
                 report_structure = ReportStructure(
                     title=f"{state.get('topic', 'Genel')} Raporu",
                     sections=[
-                        Section("Giriş", "Konuya genel bakış", False),
-                        Section("Detaylar", "Konunun detaylı analizi", True),
-                        Section("Sonuç", "Bulgular ve öneriler", False)
+                        Section(name="Giriş", description="Konuya genel bakış", research=False),
+                        Section(name="Detaylar", description="Konunun detaylı analizi", research=True),
+                        Section(name="Sonuç", description="Bulgular ve öneriler", research=False)
                     ]
                 )
 

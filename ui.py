@@ -248,13 +248,14 @@ async def run_report(topic: str):
     """Gelişmiş rapor oluşturma fonksiyonu"""
     cleaned_topic = (topic or "").strip()
     if not cleaned_topic:
-        return (
+        yield (
             "❌ Lütfen bir rapor konusu girin.",
             "",
             None,
             update_progress_display(create_progress_steps()),
             get_recent_logs()
         )
+        return
 
     # Progress steps başlat
     steps = create_progress_steps()

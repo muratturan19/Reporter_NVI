@@ -134,7 +134,8 @@ class WriterAgent:
                 return state
             else:
                 updated_state = dict(state)
-                updated_state['additional_research'] = updated_state.get('additional_research', '') + additional_research
+                existing_research = updated_state.get('additional_research') or ""
+                updated_state['additional_research'] = existing_research + additional_research
                 return updated_state
         
         async def write_section(state):

@@ -4,6 +4,9 @@
 # Core LangChain components
 langchain-core>=0.1.0
 langchain-nvidia-ai-endpoints>=0.1.0
+# Ek LLM bağlayıcıları
+langchain-openai>=0.1.0
+langchain-anthropic>=0.1.0
 
 # LangGraph for agent workflow
 langgraph>=0.0.40

@@ -442,7 +442,10 @@ def build_interface() -> gr.Blocks:
             outputs=log_display
         )
 
-        log_timer = gr.Timer(interval=2)
+        # Gradio 5.0+ Timer bileşeni "interval" yerine "value" parametresi kullanıyor.
+        # Daha eski sürümlerde de geriye dönük uyumluluk sağlamak için değer parametresi
+        # saniye cinsinden ayarlanıyor.
+        log_timer = gr.Timer(value=2)
         log_timer.tick(
             update_ui_periodically,
             outputs=log_display

@@ -2,7 +2,11 @@
 
 ## 📋 Genel Bakış
 
-Bu sistem, NVIDIA Nemotron modeli kullanarak otomatik rapor oluşturan bir AI ajanıdır. Sistem şu bileşenlerden oluşur:
+Bu sistem, modüler sağlayıcı mimarisi ile farklı LLM ve arama servislerini
+birleştirerek otomatik rapor oluşturan bir AI ajanıdır. Varsayılan
+kombinasyon OpenRouter üzerindeki NVIDIA Nemotron + Tavily aramasıdır; ancak
+OpenAI GPT-4o, Anthropic Claude gibi modelleri ve EXA ya da SerpAPI gibi
+arama servislerini de kolayca seçebilirsiniz. Sistem şu bileşenlerden oluşur:
 
 - **Araştırmacı Ajan**: Web araştırması yapar
 - **Yazar Ajan**: Araştırma verilerini kullanarak bölümler yazar  
@@ -43,16 +47,29 @@ pip install asyncio
 Proje klasöründe `.env` adında bir dosya oluşturun:
 
 ```env
-# API Keys
+# Zorunlu API anahtarları (varsayılan Nemotron + Tavily kombinasyonu için)
 OPENROUTER_API_KEY=your_openrouter_api_key_here
 TAVILY_API_KEY=your_tavily_api_key_here
 
-# Model ayarları (opsiyonel)
+# Opsiyonel LLM sağlayıcıları
+OPENAI_API_KEY=your_openai_key_here
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_TEMPERATURE=0.7
+ANTHROPIC_API_KEY=your_anthropic_key_here
+ANTHROPIC_MODEL=claude-3-haiku-20240307
+
+# Opsiyonel arama sağlayıcıları
+EXA_API_KEY=your_exa_key_here
+SERPAPI_API_KEY=your_serpapi_key_here
+
+# Varsayılan sağlayıcı seçimleri (boş bırakırsanız Nemotron + Tavily kullanılır)
+DEFAULT_LLM_PROVIDER=openrouter-nemotron
+DEFAULT_SEARCH_PROVIDERS=tavily
+
+# Genel ayarlar
 MODEL_NAME=nvidia/nemotron-nano-9b-v2:free
 MODEL_TEMPERATURE=0.7
 MODEL_MAX_TOKENS=2000
-
-# Arama ayarları (opsiyonel)
 SEARCH_MAX_RESULTS=5
 DEFAULT_SEARCH_QUERIES=3
 ```
@@ -121,13 +138,16 @@ python ui.py
 Komut sonrasında konsolda verilen URL'yi ziyaret ederek şu özelliklere
 ulaşabilirsiniz:
 
+- LLM ve arama sağlayıcı kombinasyonlarını dropdown menülerinden seçme
 - Konu başlığını metin kutusuna girme veya örneklerden seçme
 - Oluşan raporu Markdown formatında görüntüleme
 - Raporu otomatik kaydedilen `.md` dosyası olarak indirme
 - Süreç hakkında durum mesajlarını takip etme
+- Sağlayıcıların güçlü yönlerini gösteren tabloyu inceleme
 
-> Not: Arayüzün çalışması için `.env` dosyanızda OpenRouter ve Tavily API
-> anahtarları bulunmalıdır.
+> Not: Varsayılan kombinasyon için `.env` dosyanızda OpenRouter ve Tavily
+> anahtarları bulunmalıdır. Diğer LLM veya arama sağlayıcılarını
+> kullanabilmek için ilgili opsiyonel API anahtarlarını eklemeyi unutmayın.
 
 ### Programmatik Kullanım
 
@@ -136,7 +156,10 @@ import asyncio
 from main_report_agent import MainReportAgent
 
 async def create_report():
-    agent = MainReportAgent()
+    agent = MainReportAgent(
+        llm_provider_id="openrouter-nemotron",           # opsiyonel: örn. "openai-gpt4"
+        search_provider_ids=["tavily", "exa"]             # opsiyonel: birden fazla sağlayıcı
+    )
     
     # Rapor oluştur
     report = await agent.generate_report(
@@ -155,28 +178,34 @@ asyncio.run(create_report())
 
 ### Model Ayarları
 
-`report_agent_setup.py` dosyasında:
+`create_llm` fonksiyonu, seçtiğiniz sağlayıcıya göre doğru LangChain LLM
+nesnesini oluşturur. Sağlayıcı kimliğini belirtmezseniz `.env`
+dosyasındaki `DEFAULT_LLM_PROVIDER` değeri kullanılır.
 
 ```python
-llm = ChatNVIDIA(
-    base_url="https://openrouter.ai/api/v1",
-    model="nvidia/nemotron-nano-9b-v2:free",  # Model seçimi
-    api_key=OPENROUTER_API_KEY,
-    temperature=0.7,    # Yaratıcılık seviyesi (0-1)
-    max_tokens=2000     # Maksimum çıktı uzunluğu
-)
+from report_agent_setup import create_llm
+
+# Varsayılan sağlayıcıyı kullan
+llm = create_llm()
+
+# Belirli bir sağlayıcı seç
+gpt_llm = create_llm("openai-gpt4")
 ```
 
 ### Arama Ayarları
 
-`researcher_agent.py` dosyasında:
+Birden fazla arama servisini aynı anda kullanmak için `create_search_tool`
+fonksiyonuna sağlayıcı kimliklerini liste olarak verebilirsiniz. Fonksiyon,
+seçili tüm servisleri paralel çalıştıran LangChain uyumlu bir araç döndürür.
 
 ```python
-# Araştırma sorgu sayısı
-number_of_queries = 3  # Varsayılan: 3
+from report_agent_setup import create_search_tool
 
-# Arama sonuç sayısı
-max_results = 5        # Varsayılan: 5
+# Varsayılan arama sağlayıcısı (Tavily)
+default_search = create_search_tool()
+
+# Tavily + EXA kombinasyonu
+multi_search = create_search_tool(["tavily", "exa"])
 ```
 
 ## 📊 Örnek Çıktı

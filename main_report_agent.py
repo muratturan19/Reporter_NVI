@@ -14,7 +14,14 @@ from langgraph.graph import StateGraph, START, END
 import logging
 
 # Diğer modüllerden import
-from report_agent_setup import create_llm, search_web, Section, ReportStructure
+from report_agent_setup import (
+    create_llm,
+    create_search_tool,
+    Section,
+    ReportStructure,
+    DEFAULT_LLM_PROVIDER_ID,
+    DEFAULT_SEARCH_PROVIDERS,
+)
 from researcher_agent import ResearcherAgent
 from writer_agent import WriterAgent, ReportCompiler
 
@@ -198,12 +205,30 @@ class ReportAgentState:
 
 
 class MainReportAgent:
-    """Ana Rapor Ajan Sınıfı - Tüm sistemi yönetir"""
+    """Ana Rapor Ajan Sınıfı - Sağlayıcı seçimleri ile tüm sistemi yönetir"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        llm_provider_id: Optional[str] = None,
+        search_provider_ids: Optional[List[str]] = None,
+    ):
+        # Sağlayıcı seçimlerini kaydet
+        self.llm_provider_id = llm_provider_id or DEFAULT_LLM_PROVIDER_ID
+        self.search_provider_ids = (
+            list(search_provider_ids)
+            if search_provider_ids
+            else list(DEFAULT_SEARCH_PROVIDERS)
+        )
+
         # Model ve araçları başlat
-        self.llm = create_llm()
-        self.search_tool = search_web
+        self.llm = create_llm(self.llm_provider_id)
+        self.search_tool = create_search_tool(self.search_provider_ids)
+
+        logger.info(
+            "LLM sağlayıcısı: %s | Arama sağlayıcıları: %s",
+            self.llm_provider_id,
+            ", ".join(self.search_provider_ids),
+        )
 
         # Alt ajanları başlat
         self.researcher = ResearcherAgent(self.llm, self.search_tool)

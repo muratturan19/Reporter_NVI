@@ -326,14 +326,19 @@ MODERN_CSS = """
     margin-top: 25px;
 }
 
-.example-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+#example-chips {
     margin-top: 15px;
 }
 
-.example-chip {
+#example-chips [role="rowgroup"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+#example-chips button,
+#example-chips [data-testid="dataset-item"],
+#example-chips [role="row"] {
     background: #f0f9ff;
     color: #0369a1;
     padding: 8px 14px;
@@ -345,7 +350,9 @@ MODERN_CSS = """
     transition: all 0.2s ease;
 }
 
-.example-chip:hover {
+#example-chips button:hover,
+#example-chips [data-testid="dataset-item"]:hover,
+#example-chips [role="row"]:hover {
     background: #0369a1;
     color: white;
     transform: translateY(-1px);
@@ -818,13 +825,13 @@ def build_interface() -> gr.Blocks:
                     gr.Examples(
                         examples=[
                             ["Yapay zeka destekli müşteri hizmetleri çözümleri"],
-                            ["Sürdürülebilir enerji yönetiminde dijital ikiz uygulamaları"], 
+                            ["Sürdürülebilir enerji yönetiminde dijital ikiz uygulamaları"],
                             ["Finans sektöründe büyük dil modellerinin kullanımı"],
                             ["Endüstri 4.0 ve IoT sensörlerin üretim optimizasyonu"],
                             ["Blockchain teknolojisinin tedarik zinciri yönetimindeki rolü"]
                         ],
                         inputs=[topic_input],
-                        elem_classes=["example-chips"]
+                        elem_id="example-chips"
                     )
             
             with gr.Column(scale=1):

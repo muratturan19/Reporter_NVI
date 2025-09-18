@@ -428,12 +428,18 @@ class MainReportAgent:
         try:
             result = await self.graph.ainvoke(state)
 
-            if result.final_report:
-                logger.info("Rapor başarıyla oluşturuldu")
-                return result.final_report
+            # LangGraph sonuçları bazı sürümlerde dataclass yerine dict döndürebilir.
+            if isinstance(result, dict):
+                final_report = result.get("final_report", "")
             else:
-                logger.error("Rapor oluşturulamadı")
-                return "Rapor oluşturulurken bir hata oluştu."
+                final_report = getattr(result, "final_report", "")
+
+            if final_report:
+                logger.info("Rapor başarıyla oluşturuldu")
+                return final_report
+
+            logger.error("Rapor oluşturulamadı")
+            return "Rapor oluşturulurken bir hata oluştu."
 
         except Exception as e:
             logger.error(f"Rapor oluşturma hatası: {e}")

@@ -5,6 +5,7 @@ Ana Rapor Ajanı - Tüm bileşenleri birleştiren tam sistem
 
 import asyncio
 import json
+import os
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime

@@ -8,6 +8,7 @@ indirmesine olanak tanır.
 
 from __future__ import annotations
 
+import inspect
 import os
 from datetime import datetime
 from typing import Optional
@@ -165,7 +166,16 @@ def launch():
     """Arayüzü başlat."""
 
     demo = build_interface()
-    demo.queue(concurrency_count=1).launch()
+
+    queue_kwargs = {}
+    queue_params = inspect.signature(gr.Blocks.queue).parameters
+
+    if "default_concurrency_limit" in queue_params:
+        queue_kwargs["default_concurrency_limit"] = 1
+    elif "concurrency_count" in queue_params:
+        queue_kwargs["concurrency_count"] = 1
+
+    demo.queue(**queue_kwargs).launch()
 
 
 if __name__ == "__main__":

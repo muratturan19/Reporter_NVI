@@ -591,7 +591,7 @@ class ProviderFactory:
                 )
                 return provider.build_result(query, error=str(exc))
 
-        @tool(name="search_web", parse_docstring=True)
+        @tool("search_web", parse_docstring=True)
         async def multi_search(
             queries: List[str],
             topic: str = "general",

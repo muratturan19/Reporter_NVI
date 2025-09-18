@@ -326,19 +326,14 @@ MODERN_CSS = """
     margin-top: 25px;
 }
 
-#example-chips {
-    margin-top: 15px;
-}
-
-#example-chips [role="rowgroup"] {
+.example-chips {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    margin-top: 15px;
 }
 
-#example-chips button,
-#example-chips [data-testid="dataset-item"],
-#example-chips [role="row"] {
+.example-chip {
     background: #f0f9ff;
     color: #0369a1;
     padding: 8px 14px;
@@ -350,9 +345,7 @@ MODERN_CSS = """
     transition: all 0.2s ease;
 }
 
-#example-chips button:hover,
-#example-chips [data-testid="dataset-item"]:hover,
-#example-chips [role="row"]:hover {
+.example-chip:hover {
     background: #0369a1;
     color: white;
     transform: translateY(-1px);
@@ -364,11 +357,11 @@ MODERN_CSS = """
     .main-content {
         grid-template-columns: 1fr;
     }
-    
+
     .status-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .provider-grid {
         grid-template-columns: 1fr;
     }
@@ -378,11 +371,11 @@ MODERN_CSS = """
     .main-header {
         padding: 30px 20px;
     }
-    
+
     .main-header h1 {
         font-size: 2rem;
     }
-    
+
     .input-section, .provider-info, .status-panel, .report-section {
         padding: 20px;
     }
@@ -439,7 +432,7 @@ MODERN_CSS = """
 
 class LogCapture(logging.Handler):
     """Gelişmiş log yakalama"""
-    
+
     def emit(self, record):
         log_entry = self.format(record)
         _log_queue.put({
@@ -453,39 +446,122 @@ def setup_logging():
     """Logging kurulumu"""
     handler = LogCapture()
     handler.setFormatter(logging.Formatter('%(message)s'))
-    
+
     loggers = [
         'main_report_agent',
-        'researcher_agent', 
+        'researcher_agent',
         'writer_agent',
         'json_parser_fix',
         'provider_manager'
     ]
-    
+
     for logger_name in loggers:
         logger = logging.getLogger(logger_name)
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
 
 def build_provider_cards() -> str:
-    """Kompakt provider kartları oluştur"""
-    
-    # En önemli provider'ları seç
-    featured_llm = [p for p in LLM_PROVIDER_OPTIONS if p.get("default")] + [p for p in LLM_PROVIDER_OPTIONS if not p.get("default")]
-    featured_search = [p for p in SEARCH_PROVIDER_OPTIONS if p.get("default")] + [p for p in SEARCH_PROVIDER_OPTIONS if not p.get("default")]
-    
-    featured_llm = featured_llm[:2]  # İlk 2
-    featured_search = featured_search[:2]  # İlk 2
-    
-    def render_card(provider: Dict[str, Any]) -> str:
+    """Detaylı provider kartları oluştur"""
+
+    # Provider bilgileri - detaylı açıklamalarla
+    provider_details = {
+        "openrouter-nemotron": {
+            "name": "NVIDIA Nemotron",
+            "status": "ready",
+            "features": [
+                "Open-source NVIDIA modeli",
+                "Türkçe performansı dengeli",
+                "Uygun maliyetli erişim",
+                "Teknik içerikte stabil"
+            ]
+        },
+        "openai-gpt4": {
+            "name": "OpenAI GPT-4o",
+            "status": "needs_key",
+            "features": [
+                "Üst düzey muhakeme performansı",
+                "Zengin entegrasyon ekosistemi",
+                "Çok dilli içerikte güçlü",
+                "Geliştirici dostu API"
+            ]
+        },
+        "anthropic-claude": {
+            "name": "Anthropic Claude 3",
+            "status": "needs_key",
+            "features": [
+                "Güvenlik odaklı tasarım",
+                "Uzun bağlam penceresi",
+                "Etik değerlendirme yetenekleri",
+                "Hızlı Haiku modeli seçeneği"
+            ]
+        },
+        "tavily": {
+            "name": "Tavily Search",
+            "status": "ready",
+            "features": [
+                "AI için optimize edilmiş arama",
+                "Otomatik özet üretimi",
+                "Hızlı yanıt süresi",
+                "Özel arama başlıkları desteği"
+            ]
+        },
+        "exa": {
+            "name": "EXA Semantic",
+            "status": "needs_key",
+            "features": [
+                "Semantik benzerlik tabanlı",
+                "Kaynak çeşitliliği yüksek",
+                "Autoprompt ile akıllı sorgular",
+                "Derin web içerik erişimi"
+            ]
+        },
+        "serpapi": {
+            "name": "SerpAPI Google",
+            "status": "needs_key",
+            "features": [
+                "Google sonuçlarına hızlı erişim",
+                "Zengin bilgi kartı desteği",
+                "Kaynak başına detaylı metadata",
+                "Coğrafi lokasyon filtreleme"
+            ]
+        }
+    }
+
+    # Mevcut provider'ları kontrol et ve bilgilerini al
+    available_llm = []
+    available_search = []
+
+    for option in LLM_PROVIDER_OPTIONS:
+        if option["id"] in provider_details:
+            detail = provider_details[option["id"]]
+            available_llm.append({
+                "name": detail["name"],
+                "available": option.get("available", False),
+                "features": detail["features"]
+            })
+
+    for option in SEARCH_PROVIDER_OPTIONS:
+        if option["id"] in provider_details:
+            detail = provider_details[option["id"]]
+            available_search.append({
+                "name": detail["name"],
+                "available": option.get("available", False),
+                "features": detail["features"]
+            })
+
+    # İlk 2'şer tane al
+    featured_llm = available_llm[:2]
+    featured_search = available_search[:2]
+
+    def render_detailed_card(provider: Dict[str, Any]) -> str:
         status_class = "status-ready" if provider.get("available") else "status-needs-key"
         status_text = "✅ Hazır" if provider.get("available") else "⚠️ API Key"
-        
-        features = provider.get("strengths", [])[:3]  # İlk 3 özellik
+
+        features = provider.get("features", [])[:4]  # İlk 4 özellik
         features_html = ""
         for feature in features:
             features_html += f"<li>{feature}</li>"
-        
+
         return f"""
         <div class="provider-card">
             <span class="provider-name">{provider['name']}</span>
@@ -493,28 +569,28 @@ def build_provider_cards() -> str:
             <ul class="provider-features">{features_html}</ul>
         </div>
         """
-    
-    llm_cards = "".join([render_card(p) for p in featured_llm])
-    search_cards = "".join([render_card(p) for p in featured_search])
-    
+
+    llm_cards = "".join([render_detailed_card(p) for p in featured_llm])
+    search_cards = "".join([render_detailed_card(p) for p in featured_search])
+
     return f"""
     <div class="provider-info animate-slide-up">
         <h3 style="margin: 0 0 15px 0; color: #1f2937;">⚙️ Sağlayıcı Durumu</h3>
-        
+
         <div style="margin-bottom: 20px;">
             <h4 style="font-size: 14px; color: #4b5563; margin-bottom: 10px;">🧠 LLM Modelleri</h4>
             <div class="provider-grid">
                 {llm_cards}
             </div>
         </div>
-        
+
         <div style="margin-bottom: 15px;">
             <h4 style="font-size: 14px; color: #4b5563; margin-bottom: 10px;">🔍 Arama Araçları</h4>
             <div class="provider-grid">
                 {search_cards}
             </div>
         </div>
-        
+
         <div style="background: #fffbeb; border: 1px solid #fed7aa; border-radius: 8px; padding: 12px; font-size: 13px; color: #92400e;">
             💡 <strong>İpucu:</strong> API anahtarları .env dosyasından otomatik okunur
         </div>
@@ -540,7 +616,7 @@ def render_progress_steps(steps):
         'completed': '✅',
         'error': '❌'
     }
-    
+
     steps_html = ""
     for step in steps:
         icon = icons.get(step['status'], '⏳')
@@ -550,7 +626,7 @@ def render_progress_steps(steps):
             <span>{step["text"]}</span>
         </div>
         '''
-    
+
     return f"""
     <div class="progress-section">
         <h3>📊 İşlem Durumu</h3>
@@ -562,13 +638,13 @@ def render_logs(max_logs=8):
     """Son logları render et"""
     logs = []
     temp_logs = []
-    
+
     # Queue'dan logları al
     while not _log_queue.empty():
         temp_logs.append(_log_queue.get())
-    
+
     recent_logs = temp_logs[-max_logs:] if temp_logs else []
-    
+
     if not recent_logs:
         return """
         <div class="logs-section">
@@ -580,7 +656,7 @@ def render_logs(max_logs=8):
             </div>
         </div>
         """
-    
+
     logs_html = ""
     for log in recent_logs:
         level_class = f"log-{log['level'].lower()}"
@@ -591,7 +667,7 @@ def render_logs(max_logs=8):
             <span>{log["message"]}</span>
         </div>
         '''
-    
+
     return f"""
     <div class="logs-section">
         <h3>📜 Sistem Logları</h3>
@@ -647,7 +723,7 @@ def _sanitize_topic(topic: str) -> str:
 
 async def run_report(topic: str, llm_provider_id: Optional[str], search_provider_ids: Optional[Sequence[str]]):
     """Ana rapor oluşturma fonksiyonu"""
-    
+
     cleaned_topic = (topic or "").strip()
     selected_llm = llm_provider_id or DEFAULT_LLM_PROVIDER_ID
     selected_search = _normalize_search_selection(search_provider_ids)
@@ -670,7 +746,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
 
     # Progress başlat
     steps = create_progress_steps()
-    
+
     # Adım 1: Başlatma
     steps[0]["status"] = "active"
     yield (
@@ -766,10 +842,10 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
 
 def build_interface() -> gr.Blocks:
     """Ana arayüz oluşturma"""
-    
+
     with gr.Blocks(
-        title="NVIDIA Rapor Ajanı", 
-        css=MODERN_CSS, 
+        title="AI Rapor Ajanı",
+        css=MODERN_CSS,
         theme=gr.themes.Soft(),
         head='<meta name="viewport" content="width=device-width, initial-scale=1.0">'
     ) as demo:
@@ -777,9 +853,9 @@ def build_interface() -> gr.Blocks:
         # Ana Header
         gr.HTML("""
         <div class="main-header animate-fade-in">
-            <h1>🧠 NVIDIA Rapor Ajanı</h1>
+            <h1>🤖 AI Rapor Ajanı</h1>
             <p>Yapay zeka destekli araştırma ve rapor oluşturma sistemi</p>
-            <p><em>Web araştırması yaparak kapsamlı Markdown raporları oluşturur</em></p>
+            <p><em>Web araştırması yaparak kapsamlı Markdown raporları oluşturur</em></em></p>
         </div>
         """)
 
@@ -791,8 +867,7 @@ def build_interface() -> gr.Blocks:
                     choices=LLM_CHOICES,
                     value=DEFAULT_LLM_PROVIDER_ID,
                     label="🧠 LLM Sağlayıcısı",
-                    info="Raporun yazımında kullanılacak büyük dil modelini seçin",
-                    elem_classes=["form-group"]
+                    info="Raporun yazımında kullanılacak büyük dil modelini seçin"
                 )
 
                 search_dropdown = gr.Dropdown(
@@ -800,25 +875,22 @@ def build_interface() -> gr.Blocks:
                     value=list(DEFAULT_SEARCH_PROVIDERS),
                     label="🔎 Arama Sağlayıcıları",
                     info="Bir veya birden fazla web arama sağlayıcısı seçin",
-                    multiselect=True,
-                    elem_classes=["form-group"]
+                    multiselect=True
                 )
 
                 topic_input = gr.Textbox(
                     label="📝 Rapor Konusu",
                     placeholder="Örn. 'Yapay zeka ajanlarının sağlık sektöründeki uygulamaları'",
                     lines=3,
-                    max_lines=5,
-                    elem_classes=["form-group"]
+                    max_lines=5
                 )
-                
+
                 generate_button = gr.Button(
-                    "🚀 Rapor Oluştur", 
-                    variant="primary", 
-                    size="lg",
-                    elem_classes=["form-group"]
+                    "🚀 Rapor Oluştur",
+                    variant="primary",
+                    size="lg"
                 )
-                
+
                 # Örnek konular
                 with gr.Column(elem_classes=["examples-section"]):
                     gr.Markdown("### 💡 Örnek Konular")
@@ -830,10 +902,9 @@ def build_interface() -> gr.Blocks:
                             ["Endüstri 4.0 ve IoT sensörlerin üretim optimizasyonu"],
                             ["Blockchain teknolojisinin tedarik zinciri yönetimindeki rolü"]
                         ],
-                        inputs=[topic_input],
-                        elem_id="example-chips"
+                        inputs=[topic_input]
                     )
-            
+
             with gr.Column(scale=1):
                 # Provider bilgileri
                 gr.HTML(build_provider_cards())
@@ -845,24 +916,24 @@ def build_interface() -> gr.Blocks:
                     render_progress_steps(create_progress_steps()),
                     elem_id="progress-display"
                 )
-                
+
                 log_display = gr.HTML(
                     render_logs(),
                     elem_id="log-display"
                 )
-        
+
         # Sonuç bölümü
         with gr.Column():
             status_message = gr.Markdown(
                 "Rapor oluşturmak için yukarıdan bir konu seçin veya girin, sonra **Rapor Oluştur** butonuna tıklayın.",
                 elem_classes=["animate-fade-in"]
             )
-        
+
         with gr.Column(elem_classes=["report-section"]):
             report_output = gr.Markdown(
                 label="📄 Oluşturulan Rapor"
             )
-            
+
             download_output = gr.File(
                 label="💾 Raporu İndir",
                 visible=False
@@ -871,14 +942,14 @@ def build_interface() -> gr.Blocks:
         # Event handlers
         def update_ui_periodically():
             return render_logs()
-        
+
         # Auto refresh
         demo.load(update_ui_periodically, outputs=[log_display])
-        
+
         # Timer for log updates
         log_timer = gr.Timer(value=3)
         log_timer.tick(update_ui_periodically, outputs=[log_display])
-        
+
         # Main button events
         generate_button.click(
             run_report,
@@ -891,13 +962,13 @@ def build_interface() -> gr.Blocks:
             inputs=[topic_input, llm_dropdown, search_dropdown],
             outputs=[status_message, report_output, download_output, progress_display, log_display]
         )
-        
+
         # Download visibility handler
         def update_download_visibility(file_path):
             if file_path:
                 return gr.update(visible=True, value=file_path)
             return gr.update(visible=False)
-        
+
         download_output.change(
             update_download_visibility,
             inputs=[download_output],
@@ -908,33 +979,33 @@ def build_interface() -> gr.Blocks:
 
 def launch():
     """Gelişmiş arayüz başlatma"""
-    
+
     # Logging kurulum
     setup_logging()
-    
+
     print("🚀 NVIDIA Rapor Ajanı başlatılıyor...")
     print("✨ Özellikler:")
     print("   - Modern ve responsive UI tasarımı")
     print("   - Real-time progress tracking")
-    print("   - Gelişmiş sistem log görüntüleme") 
+    print("   - Gelişmiş sistem log görüntüleme")
     print("   - Multi-provider support")
     print("   - Otomatik dosya kaydetme")
     print("   - Kompakt sağlayıcı bilgileri")
-    
+
     demo = build_interface()
-    
+
     # Queue ayarları
     queue_kwargs = {}
     queue_params = inspect.signature(gr.Blocks.queue).parameters
-    
+
     if "default_concurrency_limit" in queue_params:
         queue_kwargs["default_concurrency_limit"] = 1
     elif "concurrency_count" in queue_params:
         queue_kwargs["concurrency_count"] = 1
-    
+
     print("\n🌐 Arayüz açılıyor...")
     print("📍 Adres: http://127.0.0.1:7860")
-    
+
     demo.queue(**queue_kwargs).launch(
         server_name="127.0.0.1",
         server_port=7860,

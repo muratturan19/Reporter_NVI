@@ -1,0 +1,41 @@
+# Rapor Ajanı - Gerekli Kütüphaneler
+# Windows sistemi için UTF-8 uyumlu
+
+# Core LangChain components
+langchain-core>=0.1.0
+langchain-nvidia-ai-endpoints>=0.1.0
+
+# LangGraph for agent workflow
+langgraph>=0.0.40
+
+# HTTP client for API calls
+httpx>=0.25.0
+
+# Type hints support
+typing-extensions>=4.0.0
+
+# Async support (Python 3.8+ için)
+asyncio-tools>=0.1.2
+
+# JSON handling
+jsonschema>=4.0.0
+
+# Logging and utilities
+python-dotenv>=1.0.0
+
+# Date and time handling
+python-dateutil>=2.8.0
+
+# For Windows UTF-8 support
+colorama>=0.4.6
+
+# Optional: For better error handling
+tenacity>=8.0.0
+
+# Optional: For data validation
+pydantic>=2.0.0
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# black>=23.0.0
+# flake8>=6.0.0

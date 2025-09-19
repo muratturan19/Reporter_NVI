@@ -315,7 +315,29 @@ Bu bölümleri kullanarak profesyonel bir rapor derle. Rapor şu yapıda olmalı
         )
         
         response = await self.llm.ainvoke(messages)
-        
+
+        stop_reason: Optional[str] = None
+        response_metadata = getattr(response, "response_metadata", None)
+        if isinstance(response_metadata, dict):
+            stop_reason = response_metadata.get("stop_reason") or response_metadata.get("finish_reason")
+
+        if stop_reason is None:
+            additional_kwargs = getattr(response, "additional_kwargs", None)
+            if isinstance(additional_kwargs, dict):
+                stop_reason = additional_kwargs.get("stop_reason") or additional_kwargs.get("finish_reason")
+
+        usage_info = getattr(response, "usage_metadata", None)
+        if usage_info is None and isinstance(response_metadata, dict):
+            usage_info = response_metadata.get("usage")
+
+        if stop_reason in {"max_tokens", "length"}:
+            logger.warning(
+                "Rapor derleme çıktısı token limitinde kesilmiş olabilir (stop_reason=%s, usage=%s). "
+                "Token limitlerini artırmayı veya rapor uzunluğunu azaltmayı değerlendirin.",
+                stop_reason,
+                usage_info,
+            )
+
         logger.info("Rapor derleme tamamlandı")
         return response.content
 

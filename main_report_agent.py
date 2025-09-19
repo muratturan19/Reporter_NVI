@@ -23,6 +23,7 @@ from report_agent_setup import (
 )
 from researcher_agent import ResearcherAgent
 from writer_agent import WriterAgent, ReportCompiler
+from quality_control_agent import ReportQualityAgent
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,7 @@ class ReportAgentState:
     sections_content: List[str] = field(default_factory=list)
     final_report: str = ""
     messages: List[Any] = field(default_factory=list)
+    quality_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class MainReportAgent:
@@ -233,6 +235,7 @@ class MainReportAgent:
         self.researcher = ResearcherAgent(self.llm, self.search_tool)
         self.writer = WriterAgent(self.llm, self.search_tool)
         self.compiler = ReportCompiler(self.llm)
+        self.quality_agent = ReportQualityAgent(self.llm)
 
         # Planlama promptu
         self.planner_prompt = ChatPromptTemplate.from_messages([
@@ -396,6 +399,39 @@ class MainReportAgent:
 
             return state
 
+        async def quality_control(state: ReportAgentState):
+            """Rapor kalite kontrolü ve düzeltme"""
+            logger.info("Kalite kontrolü başlatılıyor...")
+
+            if not state.final_report:
+                logger.warning("Final rapor bulunamadı, kalite kontrolü atlanıyor")
+                return state
+
+            try:
+                # Kalite analizi ve düzeltme
+                fixed_report, quality_analysis = await self.quality_agent.process_report(state.final_report)
+
+                # Kalite skorunu logla
+                score = quality_analysis.get("overall_score", "unknown")
+                severity = quality_analysis.get("severity", "unknown")
+
+                logger.info(f"Kalite skoru: {score}, Önem derecesi: {severity}")
+
+                # Düzeltilmiş raporu kaydet
+                state.final_report = fixed_report
+
+                # Quality metadata'yı state'e ekle
+                state.quality_metadata = quality_analysis
+
+                logger.info("Kalite kontrolü tamamlandı")
+
+            except Exception as e:
+                logger.error(f"Kalite kontrolü hata verdi: {e}")
+                # Hata durumunda orijinal raporu koru
+                logger.warning("Orijinal rapor korundu")
+
+            return state
+
         # Graf oluştur
         workflow = StateGraph(ReportAgentState)
 
@@ -404,13 +440,15 @@ class MainReportAgent:
         workflow.add_node("plan", plan_report)
         workflow.add_node("write", write_sections)
         workflow.add_node("compile", compile_final_report)
+        workflow.add_node("quality", quality_control)
 
         # Kenarlar
         workflow.add_edge(START, "research")
         workflow.add_edge("research", "plan")
         workflow.add_edge("plan", "write")
         workflow.add_edge("write", "compile")
-        workflow.add_edge("compile", END)
+        workflow.add_edge("compile", "quality")
+        workflow.add_edge("quality", END)
 
         return workflow.compile()
 
@@ -444,7 +482,7 @@ class MainReportAgent:
             print(f"Hata: {e}")
 
     async def generate_report(self, topic: str) -> str:
-        """Konu hakkında tam rapor oluştur"""
+        """Konu hakkında tam rapor oluştur - kalite kontrolü ile"""
         logger.info(f"Rapor oluşturma başlatılıyor: {topic}")
 
         state = ReportAgentState(topic=topic)
@@ -452,14 +490,22 @@ class MainReportAgent:
         try:
             result = await self.graph.ainvoke(state)
 
-            # LangGraph sonuçları bazı sürümlerde dataclass yerine dict döndürebilir.
+            # LangGraph sonuçları bazen dict döndürebilir
             if isinstance(result, dict):
                 final_report = result.get("final_report", "")
+                quality_metadata = result.get("quality_metadata", {})
             else:
                 final_report = getattr(result, "final_report", "")
+                quality_metadata = getattr(result, "quality_metadata", {})
 
             if final_report:
-                logger.info("Rapor başarıyla oluşturuldu")
+                # Kalite bilgilerini logla
+                if quality_metadata:
+                    score = quality_metadata.get("overall_score", "unknown")
+                    logger.info(f"Rapor başarıyla oluşturuldu - Kalite skoru: {score}")
+                else:
+                    logger.info("Rapor başarıyla oluşturuldu")
+
                 return final_report
 
             logger.error("Rapor oluşturulamadı")

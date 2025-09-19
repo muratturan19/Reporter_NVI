@@ -4,9 +4,9 @@
 
 Bu sistem, modüler sağlayıcı mimarisi ile farklı LLM ve arama servislerini
 birleştirerek otomatik rapor oluşturan bir AI ajanıdır. Varsayılan
-kombinasyon OpenRouter üzerindeki NVIDIA Nemotron + Tavily aramasıdır; ancak
-OpenAI GPT-4o, Anthropic Claude gibi modelleri ve EXA, SerpAPI ya da You.com gibi
-arama servislerini de kolayca seçebilirsiniz. Sistem şu bileşenlerden oluşur:
+kombinasyon Anthropic Claude 3 Haiku + Tavily aramasıdır; ancak OpenRouter
+üzerindeki NVIDIA Nemotron, OpenAI GPT-4o gibi modelleri ve EXA, SerpAPI ya da
+You.com gibi arama servislerini de kolayca seçebilirsiniz. Sistem şu bileşenlerden oluşur:
 
 - **Araştırmacı Ajan**: Web araştırması yapar
 - **Yazar Ajan**: Araştırma verilerini kullanarak bölümler yazar  
@@ -32,6 +32,12 @@ pip install asyncio
 
 ### 3. API Keys Alın ve .env Dosyası Oluşturun
 
+#### Anthropic API Key
+1. [Anthropic Console](https://console.anthropic.com/) adresine gidin
+2. Hesap oluşturun veya giriş yapın
+3. "API Keys" bölümünden yeni bir anahtar üretin
+4. Kullanım limitlerinizi ve faturalandırma ayarlarını doğrulayın
+
 #### OpenRouter API Key
 1. [OpenRouter](https://openrouter.ai/) sitesine gidin
 2. Hesap oluşturun
@@ -47,16 +53,20 @@ pip install asyncio
 Proje klasöründe `.env` adında bir dosya oluşturun:
 
 ```env
-# Zorunlu API anahtarları (varsayılan Nemotron + Tavily kombinasyonu için)
-OPENROUTER_API_KEY=your_openrouter_api_key_here
+# Zorunlu API anahtarları (varsayılan Claude + Tavily kombinasyonu için)
+ANTHROPIC_API_KEY=your_anthropic_key_here
 TAVILY_API_KEY=your_tavily_api_key_here
 
 # Opsiyonel LLM sağlayıcıları
+OPENROUTER_API_KEY=your_openrouter_api_key_here
 OPENAI_API_KEY=your_openai_key_here
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_TEMPERATURE=0.7
-ANTHROPIC_API_KEY=your_anthropic_key_here
+
+# Opsiyonel Anthropic ayarları
 ANTHROPIC_MODEL=claude-3-haiku-20240307
+ANTHROPIC_TEMPERATURE=0.7
+ANTHROPIC_MAX_TOKENS=2000
 
 # Opsiyonel arama sağlayıcıları
 EXA_API_KEY=your_exa_key_here
@@ -68,11 +78,12 @@ YOUCOM_API_KEY=your_youcom_key_here
 # YOUCOM_COUNTRY=tr
 # YOUCOM_DOMAIN=you.com
 
-# Varsayılan sağlayıcı seçimleri (boş bırakırsanız Nemotron + Tavily kullanılır)
-DEFAULT_LLM_PROVIDER=openrouter-nemotron
+# Varsayılan sağlayıcı seçimleri (boş bırakırsanız Claude + Tavily kullanılır)
+DEFAULT_LLM_PROVIDER=anthropic-claude
 DEFAULT_SEARCH_PROVIDERS=tavily
 
 # Genel ayarlar
+# (MODEL_NAME yalnızca OpenRouter kullanırken geçerlidir)
 MODEL_NAME=nvidia/nemotron-nano-9b-v2:free
 MODEL_TEMPERATURE=0.7
 MODEL_MAX_TOKENS=2000
@@ -151,7 +162,7 @@ ulaşabilirsiniz:
 - Süreç hakkında durum mesajlarını takip etme
 - Sağlayıcıların güçlü yönlerini gösteren tabloyu inceleme
 
-> Not: Varsayılan kombinasyon için `.env` dosyanızda OpenRouter ve Tavily
+> Not: Varsayılan kombinasyon için `.env` dosyanızda Anthropic ve Tavily
 > anahtarları bulunmalıdır. Diğer LLM veya arama sağlayıcılarını
 > kullanabilmek için ilgili opsiyonel API anahtarlarını eklemeyi unutmayın.
 
@@ -163,8 +174,8 @@ from main_report_agent import MainReportAgent
 
 async def create_report():
     agent = MainReportAgent(
-        llm_provider_id="openrouter-nemotron",           # opsiyonel: örn. "openai-gpt4"
-        search_provider_ids=["tavily", "exa"]             # opsiyonel: birden fazla sağlayıcı
+        llm_provider_id="anthropic-claude",              # opsiyonel: varsayılan Claude, örn. "openai-gpt4"
+        search_provider_ids=["tavily", "exa"]            # opsiyonel: birden fazla sağlayıcı
     )
     
     # Rapor oluştur
@@ -242,7 +253,7 @@ Yapay zeka ajanları, sağlık sektöründe devrim yaratmaktadır...
 
 #### 1. .env Dosyası Bulunamadı
 ```
-❌ Eksik API key'ler: OPENROUTER_API_KEY, TAVILY_API_KEY
+❌ Eksik API key'ler: ANTHROPIC_API_KEY, TAVILY_API_KEY
 ```
 **Çözüm**: `.env` dosyasının proje kök dizininde olduğundan emin olun.
 
@@ -269,7 +280,7 @@ Sistem `report_agent.log` dosyasına detaylı loglar yazar. Hata durumunda bu do
 1. **Spesifik konular seçin**: "AI" yerine "Sağlık sektöründe AI ajanları"
 2. **Türkçe anahtar kelimeler kullanın**: Sistem hem Türkçe hem İngilizce kaynaklarda arama yapar
 3. **Sabırlı olun**: Kapsamlı raporlar 3-5 dakika sürebilir
-4. **API limitlerini kontrol edin**: OpenRouter ve Tavily'nin rate limitleri vardır
+4. **API limitlerini kontrol edin**: Anthropic ve Tavily'nin rate limitleri vardır
 
 ### Özelleştirme
 

@@ -467,7 +467,7 @@ def build_provider_cards() -> str:
     provider_details = {
         "openrouter-nemotron": {
             "name": "NVIDIA Nemotron",
-            "status": "ready",
+            "status": "needs_key",
             "features": [
                 "Open-source NVIDIA modeli",
                 "Orta seviye performans",
@@ -487,7 +487,7 @@ def build_provider_cards() -> str:
         },
         "anthropic-claude": {
             "name": "Anthropic Claude 3",
-            "status": "needs_key",
+            "status": "ready",
             "features": [
                 "En iyi JSON output kalitesi",
                 "Uzun context window",
@@ -597,7 +597,7 @@ def build_provider_cards() -> str:
         
         <div style="background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 12px; font-size: 13px; color: #0369a1;">
             💡 <strong>Seçim İpuçları:</strong><br>
-            • <strong>Teknik konular:</strong> Claude + Tavily<br>
+            • <strong>Varsayılan (genel kullanım):</strong> Claude + Tavily<br>
             • <strong>Güncel haberler:</strong> GPT-4 + SERP<br>  
             • <strong>Akademik araştırma:</strong> Claude + EXA<br>
             • <strong>Budget-friendly:</strong> Nemotron + Tavily

@@ -66,7 +66,7 @@ OPENAI_TEMPERATURE=0.7
 # Opsiyonel Anthropic ayarları
 ANTHROPIC_MODEL=claude-3-haiku-20240307
 ANTHROPIC_TEMPERATURE=0.7
-ANTHROPIC_MAX_TOKENS=2000
+ANTHROPIC_MAX_TOKENS=4096
 
 # Opsiyonel arama sağlayıcıları
 EXA_API_KEY=your_exa_key_here
@@ -86,10 +86,17 @@ DEFAULT_SEARCH_PROVIDERS=tavily
 # (MODEL_NAME yalnızca OpenRouter kullanırken geçerlidir)
 MODEL_NAME=nvidia/nemotron-nano-9b-v2:free
 MODEL_TEMPERATURE=0.7
-MODEL_MAX_TOKENS=2000
+MODEL_MAX_TOKENS=4096
+# Global token limiti varsayılanı (opsiyonel)
+REPORTER_DEFAULT_MAX_TOKENS=4096
 SEARCH_MAX_RESULTS=5
 DEFAULT_SEARCH_QUERIES=3
 ```
+
+> Uzun raporlarda metnin kesilmesini önlemek için `ANTHROPIC_MAX_TOKENS`,
+> `MODEL_MAX_TOKENS` ve isteğe bağlı global `REPORTER_DEFAULT_MAX_TOKENS`
+> değerlerini 4096 olarak ayarladık. Modelleriniz daha geniş bir çıktı
+> üretebiliyorsa bu değerleri ihtiyacınıza göre artırabilirsiniz.
 
 **Güvenlik Notu**: `.env` dosyasını `.gitignore` dosyasına ekleyin!
 

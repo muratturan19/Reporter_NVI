@@ -20,6 +20,40 @@ from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
+# Varsayılan maksimum çıktı token sayısı. Ortam değişkeni ile
+# özelleştirilebilir ve farklı sağlayıcılar için ortak bir
+# başlangıç değeri sağlar.
+DEFAULT_MAX_TOKENS = int(os.getenv("REPORTER_DEFAULT_MAX_TOKENS", "4096"))
+
+
+def _get_max_tokens(*env_names: str, default: Optional[int] = DEFAULT_MAX_TOKENS) -> Optional[int]:
+    """Öncelik sırasına göre token limitini ortam değişkenlerinden oku.
+
+    Parametre olarak verilen ortam değişkenleri sırayla kontrol edilir. İlk
+    geçerli (tamsayıya dönüştürülebilen) değer döndürülür. Geçersiz değerler
+    tespit edildiğinde uyarı loglanır ve sıradaki aday kontrol edilir.
+
+    Args:
+        *env_names: Kontrol edilecek ortam değişkenlerinin isimleri.
+        default: Hiçbir değer bulunamadığında döndürülecek varsayılan token
+            limiti. `None` verilirse limit uygulanmaz.
+
+    Returns:
+        Bulunan token limiti ya da default değer.
+    """
+
+    for name in env_names:
+        if not name:
+            continue
+        raw_value = os.getenv(name)
+        if raw_value is None:
+            continue
+        try:
+            return int(raw_value)
+        except ValueError:
+            logger.warning("%s değeri sayıya çevrilemedi: %s", name, raw_value)
+    return default
+
 
 @dataclass
 class SearchHit:
@@ -187,7 +221,7 @@ class OpenRouterNemotronProvider(BaseLLMProvider):
 
         model = os.getenv("MODEL_NAME", "nvidia/nemotron-nano-9b-v2:free")
         temperature = float(os.getenv("MODEL_TEMPERATURE", "0.7"))
-        max_tokens = int(os.getenv("MODEL_MAX_TOKENS", "2000"))
+        max_tokens = _get_max_tokens("MODEL_MAX_TOKENS")
         api_key = os.getenv("OPENROUTER_API_KEY")
 
         logger.info("OpenRouter Nemotron modeli yükleniyor: %s", model)
@@ -235,7 +269,7 @@ class OpenAIGPT4Provider(BaseLLMProvider):
         api_key = os.getenv("OPENAI_API_KEY")
         model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         temperature = float(os.getenv("OPENAI_TEMPERATURE", os.getenv("MODEL_TEMPERATURE", "0.7")))
-        max_tokens = os.getenv("OPENAI_MAX_TOKENS", os.getenv("MODEL_MAX_TOKENS", None))
+        max_tokens = _get_max_tokens("OPENAI_MAX_TOKENS", "MODEL_MAX_TOKENS")
 
         kwargs: Dict[str, Any] = {
             "model": model,
@@ -244,10 +278,7 @@ class OpenAIGPT4Provider(BaseLLMProvider):
         }
 
         if max_tokens is not None:
-            try:
-                kwargs["max_completion_tokens"] = int(max_tokens)
-            except ValueError:
-                logger.warning("OPENAI_MAX_TOKENS değeri sayıya çevrilemedi: %s", max_tokens)
+            kwargs["max_completion_tokens"] = max_tokens
 
         logger.info("OpenAI GPT-4o modeli yükleniyor: %s", model)
         return ChatOpenAI(**kwargs)
@@ -289,7 +320,7 @@ class AnthropicClaudeProvider(BaseLLMProvider):
         api_key = os.getenv("ANTHROPIC_API_KEY")
         model = os.getenv("ANTHROPIC_MODEL", "claude-3-haiku-20240307")
         temperature = float(os.getenv("ANTHROPIC_TEMPERATURE", os.getenv("MODEL_TEMPERATURE", "0.7")))
-        max_tokens = os.getenv("ANTHROPIC_MAX_TOKENS", os.getenv("MODEL_MAX_TOKENS", None))
+        max_tokens = _get_max_tokens("ANTHROPIC_MAX_TOKENS", "MODEL_MAX_TOKENS")
 
         kwargs: Dict[str, Any] = {
             "model_name": model,
@@ -298,10 +329,7 @@ class AnthropicClaudeProvider(BaseLLMProvider):
         }
 
         if max_tokens is not None:
-            try:
-                kwargs["max_tokens_to_sample"] = int(max_tokens)
-            except ValueError:
-                logger.warning("ANTHROPIC_MAX_TOKENS değeri sayıya çevrilemedi: %s", max_tokens)
+            kwargs["max_tokens_to_sample"] = max_tokens
 
         logger.info("Anthropic Claude modeli yükleniyor: %s", model)
         return ChatAnthropic(**kwargs)

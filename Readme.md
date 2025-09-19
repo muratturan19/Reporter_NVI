@@ -5,7 +5,7 @@
 Bu sistem, modüler sağlayıcı mimarisi ile farklı LLM ve arama servislerini
 birleştirerek otomatik rapor oluşturan bir AI ajanıdır. Varsayılan
 kombinasyon OpenRouter üzerindeki NVIDIA Nemotron + Tavily aramasıdır; ancak
-OpenAI GPT-4o, Anthropic Claude gibi modelleri ve EXA ya da SerpAPI gibi
+OpenAI GPT-4o, Anthropic Claude gibi modelleri ve EXA, SerpAPI ya da You.com gibi
 arama servislerini de kolayca seçebilirsiniz. Sistem şu bileşenlerden oluşur:
 
 - **Araştırmacı Ajan**: Web araştırması yapar
@@ -61,6 +61,12 @@ ANTHROPIC_MODEL=claude-3-haiku-20240307
 # Opsiyonel arama sağlayıcıları
 EXA_API_KEY=your_exa_key_here
 SERPAPI_API_KEY=your_serpapi_key_here
+YOUCOM_API_KEY=your_youcom_key_here
+# Opsiyonel You.com ayarları
+# YOUCOM_SAFE_SEARCH=Moderate
+# YOUCOM_LANGUAGE=tr
+# YOUCOM_COUNTRY=tr
+# YOUCOM_DOMAIN=you.com
 
 # Varsayılan sağlayıcı seçimleri (boş bırakırsanız Nemotron + Tavily kullanılır)
 DEFAULT_LLM_PROVIDER=openrouter-nemotron

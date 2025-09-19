@@ -484,6 +484,145 @@ class SerpAPISearchProvider(BaseSearchProvider):
         return self.build_result(query, summary=summary, hits=hits)
 
 
+class YoucomSearchProvider(BaseSearchProvider):
+    """You.com Search API sağlayıcısı."""
+
+    provider_id = "youcom"
+    display_name = "You.com Search"
+    description = "You.com çok kaynaklı web araması ve kısa özet desteği"
+    strengths = (
+        "Çoklu kaynaklardan gerçek zamanlı sonuçlar",
+        "You.com yanıt motorundan hızlı özetler",
+        "Haber ve genel web içeriklerinde geniş kapsama",
+    )
+    docs_url = "https://docs.you.com/reference/search"
+    required_env_vars = ("YOUCOM_API_KEY",)
+    optional_env_vars = (
+        "YOUCOM_SAFE_SEARCH",
+        "YOUCOM_COUNTRY",
+        "YOUCOM_LANGUAGE",
+        "YOUCOM_DOMAIN",
+    )
+
+    api_url = "https://api.you.com/search"
+
+    async def search(
+        self,
+        query: str,
+        *,
+        topic: str = "general",
+        max_results: int = 5,
+    ) -> SearchProviderResult:
+        available, message = self.availability_status()
+        if not available:
+            return self.build_result(query, error=message)
+
+        safe_search = os.getenv("YOUCOM_SAFE_SEARCH") or os.getenv("YOUCOM_SAFESEARCH")
+        if not safe_search:
+            # Varsayılan değeri orta seviye tut, finans/news için hafif
+            safe_search = "Moderate"
+        else:
+            safe_search = safe_search.capitalize()
+
+        payload: Dict[str, Any] = {
+            "query": query,
+            "num_web_results": max_results,
+            "page": 1,
+            "domain": os.getenv("YOUCOM_DOMAIN", "you.com"),
+            "safeSearch": safe_search,
+        }
+
+        language = os.getenv("YOUCOM_LANGUAGE")
+        if not language:
+            language = "tr" if topic == "general" else "en"
+        payload["language"] = language
+
+        country = os.getenv("YOUCOM_COUNTRY")
+        if country:
+            payload["country"] = country
+
+        headers = {
+            "X-API-Key": os.getenv("YOUCOM_API_KEY", ""),
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        data: Dict[str, Any]
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(self.api_url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+        except Exception as exc:
+            logger.error("You.com arama hatası", exc_info=exc)
+            return self.build_result(query, error=str(exc))
+
+        def _extract_hits(source: Any) -> Iterable[Dict[str, Any]]:
+            if isinstance(source, list):
+                return source
+            if isinstance(source, dict):
+                # Bazı yanıtlar results => {"web": [...]}
+                for key in ("web", "web_results", "webResults", "results", "searchResults", "hits"):
+                    nested = source.get(key)
+                    if isinstance(nested, list):
+                        return nested
+            return []
+
+        hits_source: Iterable[Dict[str, Any]] = []
+        for key in (
+            "web_results",
+            "webResults",
+            "searchResults",
+            "results",
+            "hits",
+        ):
+            value = data.get(key)
+            if value:
+                hits_source = _extract_hits(value)
+                if hits_source:
+                    break
+
+        if not hits_source and isinstance(data, dict):
+            hits_source = _extract_hits(data)
+
+        hits: List[Dict[str, Any]] = []
+        for item in hits_source:
+            if not isinstance(item, dict):
+                continue
+            hits.append(
+                {
+                    "title": item.get("title") or item.get("name") or "Başlık yok",
+                    "url": item.get("url") or item.get("link") or "",
+                    "snippet": item.get("snippet")
+                    or item.get("summary")
+                    or item.get("description")
+                    or "",
+                }
+            )
+            if len(hits) >= max_results:
+                break
+
+        summary: Optional[str] = None
+        for key in (
+            "answer",
+            "instant_answer",
+            "direct_answer",
+            "summary",
+            "overview",
+        ):
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                summary = value.strip()
+                break
+
+        if not summary:
+            youchat = data.get("youChat") or data.get("youchat")
+            if isinstance(youchat, dict):
+                summary = youchat.get("response") or youchat.get("message")
+
+        return self.build_result(query, summary=summary, hits=hits)
+
+
 class ProviderFactory:
     """Sağlayıcı örneklerini yöneten fabrika sınıfı."""
 
@@ -497,6 +636,7 @@ class ProviderFactory:
         TavilySearchProvider.provider_id: TavilySearchProvider,
         ExaSearchProvider.provider_id: ExaSearchProvider,
         SerpAPISearchProvider.provider_id: SerpAPISearchProvider,
+        YoucomSearchProvider.provider_id: YoucomSearchProvider,
     }
 
     DEFAULT_LLM_PROVIDER_ID = os.getenv("DEFAULT_LLM_PROVIDER", OpenRouterNemotronProvider.provider_id)

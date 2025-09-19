@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Araştırmacı Ajan - ReAct Pattern ile
-NVIDIA Nemotron kullanarak web araştırması yapar
+Anthropic Claude kullanarak web araştırması yapar
 """
 
 import asyncio

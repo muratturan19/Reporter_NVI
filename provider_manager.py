@@ -170,7 +170,7 @@ class OpenRouterNemotronProvider(BaseLLMProvider):
     docs_url = "https://openrouter.ai/models/nvidia/nemotron-nano-9b-v2"
     required_env_vars = ("OPENROUTER_API_KEY",)
     optional_env_vars = ("MODEL_NAME", "MODEL_TEMPERATURE", "MODEL_MAX_TOKENS")
-    default = True
+    default = False
 
     def availability_status(self) -> Tuple[bool, Optional[str]]:
         ok, reason = super().availability_status()
@@ -271,6 +271,7 @@ class AnthropicClaudeProvider(BaseLLMProvider):
     docs_url = "https://docs.anthropic.com/claude/docs"
     required_env_vars = ("ANTHROPIC_API_KEY",)
     optional_env_vars = ("ANTHROPIC_MODEL", "ANTHROPIC_TEMPERATURE", "ANTHROPIC_MAX_TOKENS")
+    default = True
 
     def availability_status(self) -> Tuple[bool, Optional[str]]:
         ok, reason = super().availability_status()
@@ -639,7 +640,9 @@ class ProviderFactory:
         YoucomSearchProvider.provider_id: YoucomSearchProvider,
     }
 
-    DEFAULT_LLM_PROVIDER_ID = os.getenv("DEFAULT_LLM_PROVIDER", OpenRouterNemotronProvider.provider_id)
+    DEFAULT_LLM_PROVIDER_ID = os.getenv(
+        "DEFAULT_LLM_PROVIDER", AnthropicClaudeProvider.provider_id
+    )
     DEFAULT_SEARCH_PROVIDER_IDS = [
         provider_id
         for provider_id in (os.getenv("DEFAULT_SEARCH_PROVIDERS") or TavilySearchProvider.provider_id).split(",")

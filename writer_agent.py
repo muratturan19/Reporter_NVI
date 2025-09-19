@@ -124,7 +124,36 @@ class WriterAgent:
                 for tool_call in response.tool_calls:
                     if tool_call['name'] == 'search_web':
                         import json
-                        args = json.loads(tool_call['args'])
+
+                        raw_args = tool_call.get('args', {})
+
+                        if isinstance(raw_args, dict):
+                            args = raw_args
+                        elif isinstance(raw_args, str):
+                            raw_args = raw_args.strip()
+                            if raw_args:
+                                try:
+                                    parsed_args = json.loads(raw_args)
+                                except json.JSONDecodeError:
+                                    logger.warning(
+                                        "Araç argümanları JSON olarak parse edilemedi, string kullanılacak: %s",
+                                        raw_args,
+                                    )
+                                    parsed_args = raw_args
+                                if isinstance(parsed_args, dict):
+                                    args = parsed_args
+                                elif isinstance(parsed_args, list):
+                                    args = {"queries": parsed_args}
+                                else:
+                                    args = {"queries": [parsed_args]}
+                            else:
+                                args = {}
+                        else:
+                            logger.warning(
+                                "Araç argümanları beklenmeyen tipte: %s", type(raw_args).__name__
+                            )
+                            args = {}
+
                         search_result = await self.search_tool.ainvoke(args)
                         additional_research += "\n\n" + search_result
             

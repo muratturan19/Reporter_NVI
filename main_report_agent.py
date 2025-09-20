@@ -6,7 +6,7 @@ Ana Rapor Ajanı - Tüm bileşenleri birleştiren tam sistem
 import asyncio
 import json
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterable, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 from langchain_core.prompts import ChatPromptTemplate
@@ -24,8 +24,22 @@ from report_agent_setup import (
 from researcher_agent import ResearcherAgent
 from writer_agent import WriterAgent, ReportCompiler
 from quality_control_agent import ReportQualityAgent
+from rate_limit_utils import ProviderRateLimitError
 
 logger = logging.getLogger(__name__)
+
+
+def _merge_unique_messages(base: List[str], additional: Iterable[Any]) -> List[str]:
+    """Mesaj listelerini tekrar etmeyecek şekilde birleştir."""
+
+    merged = list(base)
+    for item in additional:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
 
 
 def _normalize_plan_response(data: Any) -> Any:
@@ -205,6 +219,17 @@ class ReportAgentState:
     quality_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class ReportRunResult:
+    """Rapor çalıştırma sonucunu ve meta bilgilerini temsil eder."""
+
+    content: str = ""
+    error: Optional[str] = None
+    fallback_messages: List[str] = field(default_factory=list)
+    llm_provider_id: str = ""
+    search_provider_ids: List[str] = field(default_factory=list)
+
+
 class MainReportAgent:
     """Ana Rapor Ajan Sınıfı - Sağlayıcı seçimleri ile tüm sistemi yönetir"""
 
@@ -245,6 +270,44 @@ class MainReportAgent:
 
         # Ana grafı oluştur
         self.graph = self._build_main_graph()
+
+    def _reset_search_metadata(self) -> None:
+        """Arama aracı meta verilerini temizle."""
+
+        if hasattr(self.search_tool, "fallback_events"):
+            try:
+                self.search_tool.fallback_events.clear()
+            except Exception:  # pragma: no cover - savunma amaçlı
+                self.search_tool.fallback_events = []
+        if hasattr(self.search_tool, "last_metadata"):
+            self.search_tool.last_metadata = {}
+
+    def _gather_search_feedback(self) -> Tuple[List[str], List[str]]:
+        """Arama aracından fallback bilgilerini topla."""
+
+        metadata = getattr(self.search_tool, "last_metadata", {}) or {}
+        events = metadata.get("fallbacks")
+        if not events:
+            events = getattr(self.search_tool, "fallback_events", [])
+
+        fallback_messages: List[str] = [
+            str(item).strip()
+            for item in events or []
+            if str(item).strip()
+        ]
+
+        used_providers = metadata.get("used_providers")
+        if isinstance(used_providers, list) and used_providers:
+            normalized: List[str] = []
+            for provider_id in used_providers:
+                pid = str(provider_id).strip()
+                if pid and pid not in normalized:
+                    normalized.append(pid)
+            search_ids = normalized
+        else:
+            search_ids = list(self.search_provider_ids)
+
+        return fallback_messages, search_ids
 
     def _build_main_graph(self):
         """Ana rapor oluşturma grafını oluştur"""
@@ -481,16 +544,102 @@ class MainReportAgent:
         except Exception as e:
             print(f"Hata: {e}")
 
-    async def generate_report(self, topic: str) -> str:
+    async def _handle_rate_limit_error(
+        self,
+        exc: ProviderRateLimitError,
+        topic: str,
+        fallback_messages: List[str],
+        attempted_llms: List[str],
+    ) -> ReportRunResult:
+        """Rate limit hatası sonrası fallback stratejisini uygula."""
+
+        search_fallbacks, used_search_ids = self._gather_search_feedback()
+        fallback_messages = _merge_unique_messages(fallback_messages, search_fallbacks)
+
+        if exc.provider_type == "llm":
+            fallback_id = ProviderFactory.find_alternative_llm_provider(
+                exclude=attempted_llms
+            )
+            current_name = ProviderFactory.get_llm_display_name(self.llm_provider_id)
+
+            if fallback_id:
+                fallback_name = ProviderFactory.get_llm_display_name(fallback_id)
+                switch_message = (
+                    f"{current_name} sağlayıcısı rate limit nedeniyle beklemeye alındı. "
+                    f"{fallback_name} ile devam ediliyor."
+                )
+                fallback_messages = _merge_unique_messages(
+                    fallback_messages, [switch_message]
+                )
+
+                fallback_agent = MainReportAgent(
+                    llm_provider_id=fallback_id,
+                    search_provider_ids=self.search_provider_ids,
+                )
+
+                fallback_result = await fallback_agent.generate_report(
+                    topic,
+                    attempted_llms=attempted_llms,
+                )
+
+                fallback_result.fallback_messages = _merge_unique_messages(
+                    fallback_messages,
+                    fallback_result.fallback_messages,
+                )
+                return fallback_result
+
+            detail = str(exc.original_exception).strip()
+            message = (
+                f"{current_name} sağlayıcısı rate limit nedeniyle kullanılamadı ve uygun alternatif bulunamadı."
+            )
+            if detail and detail not in message:
+                message = f"{message}\nDetay: {detail}"
+
+            fallback_messages = _merge_unique_messages(fallback_messages, [message])
+            return ReportRunResult(
+                content="",
+                error=message,
+                fallback_messages=fallback_messages,
+                llm_provider_id=self.llm_provider_id,
+                search_provider_ids=used_search_ids,
+            )
+
+        provider_name = ProviderFactory.get_search_display_name(exc.provider_id)
+        detail = str(exc.original_exception).strip()
+        message = f"{provider_name} sağlayıcısı rate limit nedeniyle kullanılamadı."
+        if detail and detail not in message:
+            message = f"{message}\nDetay: {detail}"
+
+        fallback_messages = _merge_unique_messages(fallback_messages, [message])
+        return ReportRunResult(
+            content="",
+            error=message,
+            fallback_messages=fallback_messages,
+            llm_provider_id=self.llm_provider_id,
+            search_provider_ids=used_search_ids,
+        )
+
+    async def generate_report(
+        self,
+        topic: str,
+        *,
+        attempted_llms: Optional[List[str]] = None,
+    ) -> ReportRunResult:
         """Konu hakkında tam rapor oluştur - kalite kontrolü ile"""
+
         logger.info(f"Rapor oluşturma başlatılıyor: {topic}")
+
+        self._reset_search_metadata()
+        fallback_messages: List[str] = []
+
+        attempted = list(attempted_llms or [])
+        attempted.append(self.llm_provider_id)
 
         state = ReportAgentState(topic=topic)
 
         try:
             result = await self.graph.ainvoke(state)
 
-            # LangGraph sonuçları bazen dict döndürebilir
             if isinstance(result, dict):
                 final_report = result.get("final_report", "")
                 quality_metadata = result.get("quality_metadata", {})
@@ -498,22 +647,51 @@ class MainReportAgent:
                 final_report = getattr(result, "final_report", "")
                 quality_metadata = getattr(result, "quality_metadata", {})
 
+            search_fallbacks, used_search_ids = self._gather_search_feedback()
+            fallback_messages = _merge_unique_messages(fallback_messages, search_fallbacks)
+
             if final_report:
-                # Kalite bilgilerini logla
                 if quality_metadata:
                     score = quality_metadata.get("overall_score", "unknown")
                     logger.info(f"Rapor başarıyla oluşturuldu - Kalite skoru: {score}")
                 else:
                     logger.info("Rapor başarıyla oluşturuldu")
 
-                return final_report
+                return ReportRunResult(
+                    content=final_report,
+                    fallback_messages=fallback_messages,
+                    llm_provider_id=self.llm_provider_id,
+                    search_provider_ids=used_search_ids,
+                )
 
             logger.error("Rapor oluşturulamadı")
-            return "Rapor oluşturulurken bir hata oluştu."
+            return ReportRunResult(
+                content="",
+                error="Rapor oluşturulurken bir hata oluştu.",
+                fallback_messages=fallback_messages,
+                llm_provider_id=self.llm_provider_id,
+                search_provider_ids=used_search_ids,
+            )
+
+        except ProviderRateLimitError as exc:
+            return await self._handle_rate_limit_error(
+                exc,
+                topic,
+                fallback_messages,
+                attempted,
+            )
 
         except Exception as e:
             logger.error(f"Rapor oluşturma hatası: {e}")
-            return f"Hata: {str(e)}"
+            search_fallbacks, used_search_ids = self._gather_search_feedback()
+            fallback_messages = _merge_unique_messages(fallback_messages, search_fallbacks)
+            return ReportRunResult(
+                content="",
+                error=f"Hata: {str(e)}",
+                fallback_messages=fallback_messages,
+                llm_provider_id=self.llm_provider_id,
+                search_provider_ids=used_search_ids,
+            )
 
     async def save_report(self, report_content: str, filename: str = None):
         """Raporu dosyaya kaydet"""
@@ -566,18 +744,31 @@ class ReportAgentCLI:
                 print(f"\n🔍 '{topic}' konusunda rapor oluşturuluyor...")
                 print("Bu işlem birkaç dakika sürebilir. Lütfen bekleyin...")
 
-                report = await self.agent.generate_report(topic)
+                result = await self.agent.generate_report(topic)
+
+                if result.error:
+                    print(f"❌ {result.error}")
+                    if result.fallback_messages:
+                        print("ℹ️ Sağlayıcı notları:")
+                        for note in result.fallback_messages:
+                            print(f" - {note}")
+                    continue
+
+                if result.fallback_messages:
+                    print("ℹ️ Sağlayıcı notları:")
+                    for note in result.fallback_messages:
+                        print(f" - {note}")
 
                 print("\n" + "="*70)
                 print("📊 OLUŞTURULAN RAPOR")
                 print("="*70)
-                print(report)
+                print(result.content)
                 print("="*70)
 
                 # Kaydetme seçeneği
                 save_choice = input("\n💾 Raporu dosyaya kaydetmek ister misiniz? (e/h): ").lower()
                 if save_choice in ['e', 'evet', 'y', 'yes']:
-                    filename = await self.agent.save_report(report)
+                    filename = await self.agent.save_report(result.content)
                     if filename:
                         print(f"✅ Rapor kaydedildi: {filename}")
                     else:

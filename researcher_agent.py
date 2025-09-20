@@ -255,18 +255,18 @@ Her katman için:
 - Türkçe ve İngilizce anahtar kelimeleri birlikte değerlendir.
 
 Yanıtını şu JSON formatında ver:
-{
-  "layers": {
-    "foundation": {
+{{
+  "layers": {{
+    "foundation": {{
       "focus": "...",
       "source_targets": ["..."],
       "queries": ["..."]
-    },
+    }},
     ...
-  },
+  }},
   "notes": "Opsiyonel genel notlar",
   "total_queries": 0
-}
+}}
 
 Belirtilen katman kimliklerini (foundation, technical, practical,
 future, comparative) kullan. Her katman için minimum hedef sorgu
@@ -299,20 +299,20 @@ analistisiniz. Aşağıdaki görevleri tamamlayın:
 5. Kritik bulgular için hangi kaynaklarla çapraz doğrulama yapılması gerektiğini belirtin.
 
 Yanıtınızı şu JSON formatında verin:
-{
-  "patterns": [{"insight": "...", "supporting_layers": ["..."]}],
-  "contradictions": [{"issue": "...", "sources_to_compare": ["..."]}],
-  "trends": [{"trend": "...", "evidence": ["..."]}],
-  "gaps": {
-    "foundation": {
+{{
+  "patterns": [{{"insight": "...", "supporting_layers": ["..."]}}],
+  "contradictions": [{{"issue": "...", "sources_to_compare": ["..."]}}],
+  "trends": [{{"trend": "...", "evidence": ["..."]}}],
+  "gaps": {{
+    "foundation": {{
       "missing_topics": ["..."],
       "follow_up_queries": ["..."],
       "validation_targets": ["..."]
-    },
+    }},
     ...
-  },
-  "cross_validation": [{"claim": "...", "recommended_sources": ["..."]}]
-}
+  }},
+  "cross_validation": [{{"claim": "...", "recommended_sources": ["..."]}}]
+}}
 
 Eğer belirli bir bölüm için veri yoksa ilgili alanı boş liste olarak
 bırakın. Tahmin yerine veriye dayalı öneriler üretin.

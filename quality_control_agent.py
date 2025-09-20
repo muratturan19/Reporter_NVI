@@ -43,14 +43,14 @@ class ReportQualityAgent:
    - Inconsistent formatting
 
 Sadece sorunları listele, düzeltme yapma. JSON formatında yanıt ver:
-{
+{{
   "encoding_issues": ["sorun1", "sorun2"],
-  "format_issues": ["sorun1", "sorun2"], 
+  "format_issues": ["sorun1", "sorun2"],
   "content_issues": ["sorun1", "sorun2"],
   "structural_issues": ["sorun1", "sorun2"],
   "severity": "low|medium|high",
   "overall_score": 0-100
-}"""),
+}}"""),
             ("human", "Rapor:\n\n{report}")
         ])
 

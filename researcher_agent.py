@@ -386,6 +386,9 @@ class ResearcherAgent:
             (layer["id"], layer) for layer in RESEARCH_LAYER_DEFINITIONS
         )
 
+        self.DEFAULT_SEARCH_TOPIC = "general"
+        self.VALID_SEARCH_TOPICS = frozenset({"general", "news", "finance"})
+
         self.layered_query_prompt = ChatPromptTemplate.from_messages([
             ("system", LAYERED_QUERY_SYSTEM_PROMPT),
             ("human", LAYERED_QUERY_HUMAN_PROMPT),
@@ -398,6 +401,21 @@ class ResearcherAgent:
             ("system", SYNTHESIS_SYSTEM_PROMPT),
             ("human", SYNTHESIS_HUMAN_PROMPT),
         ])
+
+    def _normalize_search_topic(self, topic: Optional[str]) -> str:
+        """Arama aracı için konu değerini normalize et."""
+
+        if topic is None:
+            return self.DEFAULT_SEARCH_TOPIC
+
+        normalized = str(topic).strip().lower()
+        if not normalized:
+            return self.DEFAULT_SEARCH_TOPIC
+
+        if normalized in self.VALID_SEARCH_TOPICS:
+            return normalized
+
+        return self.DEFAULT_SEARCH_TOPIC
 
     async def research(self, topic: str, number_of_queries: Optional[int] = None) -> Dict[str, Any]:
         """Katmanlı araştırma sürecini yürüt."""
@@ -556,7 +574,10 @@ class ResearcherAgent:
                 if not query_text:
                     continue
                 logger.info("Arama: [%s] %s", layer_id, query_text)
-                args = {"queries": [query_text], "topic": topic}
+                normalized_topic = self._normalize_search_topic(topic)
+                args = {"queries": [query_text]}
+                if normalized_topic:
+                    args["topic"] = normalized_topic
                 try:
                     search_output = await self.search_tool.ainvoke(args)
                 except Exception as exc:  # pragma: no cover - dış servis hataları

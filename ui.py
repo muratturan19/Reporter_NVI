@@ -729,9 +729,15 @@ def _sanitize_topic(topic: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{sanitized[:50]}_{timestamp}.md"
 
+def _file_component_update(file_path: Optional[str]) -> gr.Update:
+    """Dosya mevcutsa indirme bileşenini görünür yap"""
+    if file_path:
+        return gr.update(value=file_path, visible=True)
+    return gr.update(value=None, visible=False)
+
 async def run_report(topic: str, llm_provider_id: Optional[str], search_provider_ids: Optional[Sequence[str]]):
     """Ana rapor oluşturma fonksiyonu"""
-    
+
     cleaned_topic = (topic or "").strip()
     selected_llm = llm_provider_id or DEFAULT_LLM_PROVIDER_ID
     selected_search = _normalize_search_selection(search_provider_ids)
@@ -746,7 +752,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
         yield (
             f"❌ Lütfen bir rapor konusu girin.\n\n{provider_summary}",
             "",
-            None,
+            _file_component_update(None),
             render_progress_steps(steps),
             render_logs()
         )
@@ -760,7 +766,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
     yield (
         f"🚀 Sistem başlatılıyor...\n\n{provider_summary}",
         "",
-        None,
+        _file_component_update(None),
         render_progress_steps(steps),
         render_logs()
     )
@@ -774,7 +780,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
         yield (
             "🔍 Web araştırması başladı...",
             "",
-            None,
+            _file_component_update(None),
             render_progress_steps(steps),
             render_logs()
         )
@@ -793,7 +799,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
             yield (
                 f"❌ {error_msg}",
                 "",
-                None,
+                _file_component_update(None),
                 render_progress_steps(steps),
                 render_logs()
             )
@@ -807,7 +813,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
         yield (
             "💾 Rapor kaydediliyor...",
             report,
-            None,
+            _file_component_update(None),
             render_progress_steps(steps),
             render_logs()
         )
@@ -828,7 +834,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
         yield (
             success_message,
             report,
-            filepath if filepath else None,
+            _file_component_update(filepath),
             render_progress_steps(steps),
             render_logs()
         )
@@ -843,7 +849,7 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
         yield (
             error_message,
             "",
-            None,
+            _file_component_update(None),
             render_progress_steps(steps),
             render_logs()
         )

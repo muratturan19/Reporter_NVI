@@ -8,12 +8,100 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _find_last_unescaped_quote(segment: str) -> int | None:
+    """Return index of the last unescaped double quote in the given segment."""
+
+    idx = len(segment) - 1
+    while idx >= 0:
+        if segment[idx] == '"':
+            backslash_count = 0
+            lookback = idx - 1
+            while lookback >= 0 and segment[lookback] == '\\':
+                backslash_count += 1
+                lookback -= 1
+            if backslash_count % 2 == 0:
+                return idx
+        idx -= 1
+    return None
+
+
+def _escape_unescaped_quotes(value: str) -> tuple[str, bool]:
+    """Escape naked double quotes inside a JSON string value."""
+
+    escaped_chars = []
+    backslash_run = 0
+    modified = False
+
+    for char in value:
+        if char == '\\':
+            escaped_chars.append(char)
+            backslash_run += 1
+            continue
+
+        if char == '"':
+            if backslash_run % 2 == 0:
+                escaped_chars.append('\\"')
+                modified = True
+            else:
+                escaped_chars.append(char)
+            backslash_run = 0
+            continue
+
+        escaped_chars.append(char)
+        backslash_run = 0
+
+    return ''.join(escaped_chars), modified
+
+
+def _normalize_unescaped_quotes(content: str) -> str:
+    """Normalize unescaped quotes in string values without touching JSON structure."""
+
+    field_pattern = re.compile(r'(^\s*"[^"\\]+"\s*:\s*")', re.MULTILINE)
+    normalized_chunks = []
+    cursor = 0
+    content_changed = False
+
+    for match in field_pattern.finditer(content):
+        prefix_end = match.end()
+        normalized_chunks.append(content[cursor:prefix_end])
+
+        line_end = content.find('\n', prefix_end)
+        if line_end == -1:
+            line_end = len(content)
+
+        segment = content[prefix_end:line_end]
+        closing_rel = _find_last_unescaped_quote(segment)
+
+        if closing_rel is None:
+            normalized_chunks.append(segment)
+            cursor = line_end
+            continue
+
+        value = segment[:closing_rel]
+        fixed_value, modified = _escape_unescaped_quotes(value)
+
+        if modified:
+            content_changed = True
+        normalized_chunks.append(fixed_value)
+        normalized_chunks.append(segment[closing_rel:])
+        cursor = line_end
+
+    normalized_chunks.append(content[cursor:])
+
+    if content_changed:
+        logger.info("Model yanıtında kaçışsız çift tırnaklar düzeltildi.")
+
+    return ''.join(normalized_chunks)
+
+
 def parse_json_from_response(response_content: str) -> dict:
     """Model yanıtından JSON'ı güvenli şekilde çıkarır"""
 
     try:
         content = response_content.strip()
         logger.info(f"Ham model yanıtı (ilk 300 karakter): {content[:300]}")
+
+        content = _normalize_unescaped_quotes(content)
 
         # Metod 1: Doğrudan JSON parse etmeyi dene
         try:

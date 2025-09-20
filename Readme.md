@@ -186,12 +186,25 @@ async def create_report():
     )
     
     # Rapor oluştur
-    report = await agent.generate_report(
+    result = await agent.generate_report(
         "Yapay zeka ajanlarının sağlık sektöründeki uygulamaları"
     )
-    
+
+    if result.error:
+        print("❌ Hata:", result.error)
+        if result.fallback_messages:
+            print("ℹ️ Notlar:")
+            for note in result.fallback_messages:
+                print(" -", note)
+        return
+
+    if result.fallback_messages:
+        print("ℹ️ Sağlayıcı notları:")
+        for note in result.fallback_messages:
+            print(" -", note)
+
     # Raporu kaydet
-    filename = await agent.save_report(report)
+    filename = await agent.save_report(result.content)
     print(f"Rapor kaydedildi: {filename}")
 
 # Çalıştır

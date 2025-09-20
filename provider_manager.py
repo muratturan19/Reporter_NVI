@@ -18,6 +18,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import httpx
 from langchain_core.tools import tool
 
+from rate_limit_utils import RateLimitAwareLLM, is_rate_limit_exception
+
 logger = logging.getLogger(__name__)
 
 # Varsayılan maksimum çıktı token sayısı. Ortam değişkeni ile
@@ -74,6 +76,8 @@ class SearchProviderResult:
     hits: List[SearchHit] = field(default_factory=list)
     summary: Optional[str] = None
     error: Optional[str] = None
+    rate_limited: bool = False
+    notes: List[str] = field(default_factory=list)
 
 
 class BaseProvider(ABC):
@@ -143,6 +147,8 @@ class BaseSearchProvider(BaseProvider):
         summary: Optional[str] = None,
         hits: Optional[Iterable[Dict[str, Any]] | Iterable[SearchHit]] = None,
         error: Optional[str] = None,
+        rate_limited: bool = False,
+        notes: Optional[Iterable[str]] = None,
     ) -> SearchProviderResult:
         """Alt sınıflar için yardımcı sonuç oluşturucu."""
 
@@ -172,6 +178,8 @@ class BaseSearchProvider(BaseProvider):
             summary=summary,
             hits=normalized_hits,
             error=error,
+            rate_limited=rate_limited,
+            notes=list(notes or []),
         )
 
     async def search(
@@ -713,6 +721,22 @@ class ProviderFactory:
         return provider_cls()
 
     @classmethod
+    def get_llm_display_name(cls, provider_id: str) -> str:
+        provider_cls = cls.LLM_PROVIDERS.get(cls.normalize_provider_id(provider_id) or "")
+        if not provider_cls:
+            return provider_id
+        provider = provider_cls()
+        return provider.display_name or provider.provider_id
+
+    @classmethod
+    def get_search_display_name(cls, provider_id: str) -> str:
+        provider_cls = cls.SEARCH_PROVIDERS.get(cls.normalize_provider_id(provider_id) or "")
+        if not provider_cls:
+            return provider_id
+        provider = provider_cls()
+        return provider.display_name or provider.provider_id
+
+    @classmethod
     def get_search_providers(cls, provider_ids: Optional[Iterable[str]] = None) -> List[BaseSearchProvider]:
         ids: List[str]
         if provider_ids is None:
@@ -739,12 +763,45 @@ class ProviderFactory:
         return providers
 
     @classmethod
+    def find_alternative_llm_provider(
+        cls,
+        *,
+        exclude: Iterable[str] = (),
+    ) -> Optional[str]:
+        excluded = {cls.normalize_provider_id(pid) for pid in exclude if pid}
+        for provider_id, provider_cls in cls.LLM_PROVIDERS.items():
+            if provider_id in excluded:
+                continue
+            provider = provider_cls()
+            available, _ = provider.availability_status()
+            if available:
+                return provider_id
+        return None
+
+    @classmethod
+    def find_alternative_search_provider(
+        cls,
+        *,
+        exclude: Iterable[str] = (),
+    ) -> Optional[str]:
+        excluded = {cls.normalize_provider_id(pid) for pid in exclude if pid}
+        for provider_id, provider_cls in cls.SEARCH_PROVIDERS.items():
+            if provider_id in excluded:
+                continue
+            provider = provider_cls()
+            available, _ = provider.availability_status()
+            if available:
+                return provider_id
+        return None
+
+    @classmethod
     def create_llm(cls, provider_id: Optional[str] = None):
         provider = cls.get_llm_provider(provider_id)
         available, message = provider.availability_status()
         if not available:
             raise RuntimeError(f"LLM sağlayıcısı kullanılamıyor: {message}")
-        return provider.create_llm()
+        base_llm = provider.create_llm()
+        return RateLimitAwareLLM(base_llm, provider.provider_id)
 
     @classmethod
     def create_search_tool(
@@ -773,15 +830,26 @@ class ProviderFactory:
         ) -> SearchProviderResult:
             available, message = provider.availability_status()
             if not available:
-                return provider.build_result(query, error=message)
+                notes = ["Sağlayıcı kullanılabilir değil."] if message else None
+                return provider.build_result(query, error=message, notes=notes)
 
             try:
                 return await provider.search(query, topic=topic, max_results=limit)
             except Exception as exc:  # pragma: no cover - hata durumlarını logla
-                logger.error(
+                rate_limited = is_rate_limit_exception(exc)
+                log_method = logger.warning if rate_limited else logger.error
+                log_method(
                     "Arama sağlayıcısı hata verdi: %s", provider.provider_id, exc_info=exc
                 )
-                return provider.build_result(query, error=str(exc))
+                notes: List[str] = []
+                if rate_limited:
+                    notes.append("Sağlayıcı rate limit nedeniyle yanıt veremedi.")
+                return provider.build_result(
+                    query,
+                    error=str(exc),
+                    rate_limited=rate_limited,
+                    notes=notes or None,
+                )
 
         @tool("search_web", parse_docstring=True)
         async def multi_search(
@@ -809,14 +877,26 @@ class ProviderFactory:
 
             formatted_output: List[str] = ["=== ARAŞTIRMA SONUÇLARI ===", ""]
 
+            if hasattr(multi_search, "fallback_events"):
+                multi_search.fallback_events.clear()
+            else:  # pragma: no cover - ilk çağrı
+                multi_search.fallback_events = []
+
             if isinstance(queries, str):
                 queries = [queries]
 
             if not queries:
+                metadata = {"fallbacks": [], "used_providers": []}
+                multi_search.last_metadata = metadata
                 return "Arama yapılacak sorgu bulunamadı."
+
+            fallback_events: List[str] = []
+            providers_used: set[str] = {provider.provider_id for provider in providers}
 
             for query in queries:
                 formatted_output.append(f"Sorgu: {query}")
+
+                initial_providers = {provider.provider_id for provider in providers}
 
                 results = await asyncio.gather(
                     *[
@@ -825,8 +905,84 @@ class ProviderFactory:
                     ]
                 )
 
+                combined_results: List[SearchProviderResult] = list(results)
+
                 for provider_result in results:
+                    if not provider_result.rate_limited:
+                        continue
+
+                    attempted_ids = set(initial_providers)
+                    fallback_success = False
+                    last_result: Optional[SearchProviderResult] = None
+
+                    while True:
+                        fallback_id = cls.find_alternative_search_provider(exclude=attempted_ids)
+                        if not fallback_id:
+                            break
+
+                        fallback_cls = cls.SEARCH_PROVIDERS.get(fallback_id)
+                        attempted_ids.add(fallback_id)
+                        if fallback_cls is None:
+                            continue
+
+                        fallback_provider = fallback_cls()
+                        providers_used.add(fallback_provider.provider_id)
+
+                        fallback_result = await _execute_provider(
+                            fallback_provider, query, topic, effective_limit
+                        )
+                        last_result = fallback_result
+                        combined_results.append(fallback_result)
+
+                        if fallback_result.rate_limited:
+                            message = (
+                                f"{provider_result.provider_name} rate limit yaşadı. "
+                                f"{fallback_provider.display_name} ile denendi ancak o da rate limit verdi."
+                            )
+                        elif fallback_result.error:
+                            message = (
+                                f"{provider_result.provider_name} rate limit yaşadı. "
+                                f"{fallback_provider.display_name} ile denendi fakat hata oluştu: {fallback_result.error}"
+                            )
+                        else:
+                            message = (
+                                f"{provider_result.provider_name} rate limit yaşadı. "
+                                f"{fallback_provider.display_name} ile arama başarıyla tamamlandı."
+                            )
+                            fallback_success = True
+
+                        fallback_result.notes.append(message)
+                        fallback_events.append(message)
+
+                        if fallback_result.rate_limited:
+                            continue
+
+                        if fallback_result.error:
+                            break
+
+                        if fallback_success:
+                            break
+
+                    if not fallback_success:
+                        if last_result is None:
+                            message = (
+                                f"{provider_result.provider_name} sağlayıcısı rate limit nedeniyle kullanılamadı ve alternatif sağlayıcı bulunamadı."
+                            )
+                            provider_result.notes.append(message)
+                            fallback_events.append(message)
+                        elif last_result.rate_limited:
+                            message = (
+                                f"{provider_result.provider_name} için denenen tüm sağlayıcılar rate limit verdi."
+                            )
+                            provider_result.notes.append(message)
+                            fallback_events.append(message)
+
+                for provider_result in combined_results:
                     formatted_output.append(f"[{provider_result.provider_name}]")
+
+                    if provider_result.notes:
+                        for note in provider_result.notes:
+                            formatted_output.append(f"ℹ️ {note}")
 
                     if provider_result.error:
                         formatted_output.append(f"⚠️ {provider_result.error}")
@@ -848,6 +1004,13 @@ class ProviderFactory:
                     formatted_output.append("")
 
                 formatted_output.append("")
+
+            metadata = {
+                "fallbacks": fallback_events,
+                "used_providers": sorted(providers_used),
+            }
+            multi_search.last_metadata = metadata
+            multi_search.fallback_events.extend(fallback_events)
 
             return "\n".join(formatted_output).strip()
 

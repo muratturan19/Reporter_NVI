@@ -787,17 +787,35 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
 
         # Rapor oluşturma
         start_time = time.time()
-        report = await agent.generate_report(cleaned_topic)
+        result = await agent.generate_report(cleaned_topic)
 
-        if not report or report.strip().lower().startswith("hata"):
-            # Hata durumu
+        final_llm_id = result.llm_provider_id or selected_llm
+        final_search_ids = result.search_provider_ids or list(selected_search)
+        final_search_ids = list(dict.fromkeys(final_search_ids)) or list(selected_search)
+
+        final_provider_summary = (
+            f"LLM: {_format_provider_display(final_llm_id, LLM_PROVIDER_MAP)}\n"
+            f"Arama: {', '.join([_format_provider_display(pid, SEARCH_PROVIDER_MAP) for pid in final_search_ids])}"
+        )
+
+        fallback_info = result.fallback_messages or []
+        fallback_block = ""
+        if fallback_info:
+            formatted_notes = "\n".join(f"- {note}" for note in fallback_info)
+            fallback_block = f"\n\nℹ️ Sağlayıcı güncellemeleri:\n{formatted_notes}"
+
+        if result.error or not (result.content or "").strip():
             for step in steps:
                 if step["status"] == "active":
                     step["status"] = "error"
 
-            error_msg = report if report else "Rapor oluşturulamadı. Lütfen tekrar deneyin."
+            error_msg = result.error or "Rapor oluşturulamadı. Lütfen tekrar deneyin."
+            status_text = f"❌ {error_msg}\n\n🔁 Kullanılan sağlayıcılar:\n{final_provider_summary}"
+            if fallback_block:
+                status_text += fallback_block
+
             yield (
-                f"❌ {error_msg}",
+                status_text,
                 "",
                 _file_component_update(None),
                 render_progress_steps(steps),
@@ -805,35 +823,45 @@ async def run_report(topic: str, llm_provider_id: Optional[str], search_provider
             )
             return
 
-        # Tüm adımları tamamlandı olarak işaretle
+        report_text = result.content
+
         for step in steps[:-1]:
             step["status"] = "completed"
 
         steps[-1]["status"] = "active"
+
+        status_text = "💾 Rapor kaydediliyor..."
+        if final_provider_summary != provider_summary or fallback_block:
+            status_text += f"\n\n🔁 Kullanılan sağlayıcılar:\n{final_provider_summary}"
+        if fallback_block:
+            status_text += fallback_block
+
         yield (
-            "💾 Rapor kaydediliyor...",
-            report,
+            status_text,
+            report_text,
             _file_component_update(None),
             render_progress_steps(steps),
             render_logs()
         )
 
-        # Dosya kaydetme
         filename = _sanitize_topic(cleaned_topic)
-        filepath = await agent.save_report(report, filename=filename)
+        filepath = await agent.save_report(report_text, filename=filename)
 
         steps[-1]["status"] = "completed"
 
-        # Başarılı tamamlama
         elapsed_time = time.time() - start_time
         success_message = f"✅ Rapor başarıyla oluşturuldu! ({elapsed_time:.1f} saniye)"
 
         if filepath:
             success_message += f"\n📁 Dosya: {os.path.basename(filepath)}"
+        if final_provider_summary != provider_summary or fallback_block:
+            success_message += f"\n\n🔁 Kullanılan sağlayıcılar:\n{final_provider_summary}"
+        if fallback_block:
+            success_message += fallback_block
 
         yield (
             success_message,
-            report,
+            report_text,
             _file_component_update(filepath),
             render_progress_steps(steps),
             render_logs()

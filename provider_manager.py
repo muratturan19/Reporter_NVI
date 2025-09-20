@@ -350,6 +350,24 @@ class TavilySearchProvider(BaseSearchProvider):
     required_env_vars = ("TAVILY_API_KEY",)
     optional_env_vars = ("SEARCH_MAX_RESULTS",)
     default = True
+    VALID_TOPICS = frozenset({"general", "news", "finance"})
+    DEFAULT_TOPIC = "general"
+
+    @classmethod
+    def _normalize_topic(cls, topic: Optional[str]) -> str:
+        """Tavily'nin kabul ettiği arama konu değerini döndür."""
+
+        if topic is None:
+            return cls.DEFAULT_TOPIC
+
+        normalized = str(topic).strip().lower()
+        if not normalized:
+            return cls.DEFAULT_TOPIC
+
+        if normalized in cls.VALID_TOPICS:
+            return normalized
+
+        return cls.DEFAULT_TOPIC
 
     async def search(
         self,
@@ -362,6 +380,7 @@ class TavilySearchProvider(BaseSearchProvider):
         if not available:
             return self.build_result(query, error=message)
 
+        normalized_topic = self._normalize_topic(topic)
         payload = {
             "api_key": os.getenv("TAVILY_API_KEY"),
             "query": query,
@@ -369,8 +388,10 @@ class TavilySearchProvider(BaseSearchProvider):
             "include_answer": True,
             "include_raw_content": False,
             "max_results": max_results,
-            "topic": topic,
         }
+
+        if normalized_topic in self.VALID_TOPICS:
+            payload["topic"] = normalized_topic
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:

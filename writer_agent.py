@@ -4,8 +4,9 @@ Yazar Ajan - Araştırma verilerini kullanarak rapor bölümleri yazar
 """
 
 import asyncio
-from typing import Dict, Any, Optional, TypedDict
-from dataclasses import dataclass
+import re
+from datetime import datetime
+from typing import Dict, Any, Optional, TypedDict, List
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, START, END
@@ -303,18 +304,29 @@ Bu bölümleri kullanarak profesyonel bir rapor derle. Rapor şu yapıda olmalı
     async def compile_report(self, topic: str, sections: list) -> str:
         """Bölümleri birleştirerek final rapor oluştur"""
         logger.info("Rapor derleniyor...")
-        
+
+        if not sections:
+            logger.warning("Derlenecek bölüm bulunamadı, manuel derleme kullanılacak")
+            return self._manual_compile(topic, sections)
+
         # Bölümleri formatla
         formatted_sections = ""
         for i, section in enumerate(sections, 1):
             formatted_sections += f"=== BÖLÜM {i} ===\n{section}\n\n"
-        
+
         messages = self.compile_prompt.format_messages(
             topic=topic,
             sections=formatted_sections
         )
-        
-        response = await self.llm.ainvoke(messages)
+
+        try:
+            response = await self.llm.ainvoke(messages)
+        except Exception as exc:
+            logger.error(
+                "LLM tabanlı derleme başarısız oldu, manuel derleme kullanılacak: %s",
+                exc,
+            )
+            return self._manual_compile(topic, sections)
 
         stop_reason: Optional[str] = None
         response_metadata = getattr(response, "response_metadata", None)
@@ -330,16 +342,184 @@ Bu bölümleri kullanarak profesyonel bir rapor derle. Rapor şu yapıda olmalı
         if usage_info is None and isinstance(response_metadata, dict):
             usage_info = response_metadata.get("usage")
 
+        compiled_report = response.content or ""
+
+        fallback_reason = self._should_use_fallback(compiled_report, sections, stop_reason, usage_info)
+        if fallback_reason:
+            logger.warning(
+                "LLM derleme çıktısı hedeflenen kapsamı karşılamadı (%s). Manuel derleme uygulanıyor.",
+                fallback_reason,
+            )
+            return self._manual_compile(topic, sections)
+
         if stop_reason in {"max_tokens", "length"}:
             logger.warning(
-                "Rapor derleme çıktısı token limitinde kesilmiş olabilir (stop_reason=%s, usage=%s). "
-                "Token limitlerini artırmayı veya rapor uzunluğunu azaltmayı değerlendirin.",
+                "Rapor derleme çıktısı token limitinde kesilmiş olabilir (stop_reason=%s, usage=%s).",
                 stop_reason,
                 usage_info,
             )
 
         logger.info("Rapor derleme tamamlandı")
-        return response.content
+        return compiled_report
+
+    def _should_use_fallback(
+        self,
+        compiled_report: str,
+        sections: list,
+        stop_reason: Optional[str],
+        usage_info: Optional[Any],
+    ) -> Optional[str]:
+        """LLM çıktısının yeterli olup olmadığını değerlendir."""
+
+        if stop_reason in {"max_tokens", "length"}:
+            return f"stop_reason={stop_reason}"
+
+        total_section_words = sum(len(str(section).split()) for section in sections)
+        compiled_words = len(compiled_report.split())
+
+        if total_section_words >= 400:
+            expected_min = max(400, int(total_section_words * 0.5))
+            if compiled_words < expected_min:
+                return f"compiled_report_too_short({compiled_words} < {expected_min})"
+
+        # İçindekiler/Giriş/Sonuç başlıklarının eksikliği rapor bütünlüğünü bozabilir
+        normalized_report = compiled_report.lower()
+        critical_markers = ["içindekiler", "giriş", "sonuç"]
+        missing_markers = [marker for marker in critical_markers if marker not in normalized_report]
+        if len(missing_markers) >= 2 and total_section_words >= 200:
+            return f"missing_markers={','.join(missing_markers)}"
+
+        return None
+
+    def _manual_compile(self, topic: str, sections: list) -> str:
+        """LLM başarısız olduğunda manuel olarak rapor derle."""
+
+        topic_text = topic or "Genel Konu"
+        section_infos = []
+
+        for index, raw_section in enumerate(sections, 1):
+            section_text = str(raw_section) if not isinstance(raw_section, str) else raw_section
+            title, body = self._extract_section_title_and_body(section_text, index)
+            section_infos.append((title, body))
+
+        if not section_infos:
+            section_infos.append(("Araştırma Özeti", "Bu rapor için bölüm içerikleri sağlanamadı."))
+
+        section_titles = [title for title, _ in section_infos]
+        today = datetime.now().strftime("%d %B %Y")
+
+        lines: List[str] = [
+            f"# {topic_text} - Kapsamlı Araştırma Raporu",
+            f"_Yayın Tarihi: {today}_",
+            "",
+            "## İçindekiler",
+            "",
+        ]
+
+        for index, (title, _) in enumerate(section_infos, 1):
+            anchor = self._slugify_title(title, index)
+            lines.append(f"{index}. [{title}](#{anchor})")
+
+        lines.append("")
+
+        intro_sections_text = ""
+        if section_titles:
+            if len(section_titles) == 1:
+                intro_sections_text = section_titles[0]
+            else:
+                intro_sections_text = ", ".join(section_titles[:-1]) + f" ve {section_titles[-1]}"
+
+        lines.append("## Giriş")
+        lines.append("")
+
+        intro_paragraphs = [
+            f"Bu rapor, {topic_text} başlığını derinlemesine incelemek amacıyla hazırlanmıştır.",
+        ]
+
+        if intro_sections_text:
+            intro_paragraphs.append(
+                f"Çalışma kapsamında {intro_sections_text} başlıkları ayrıntılı olarak değerlendirilmiştir."
+            )
+
+        intro_paragraphs.append(
+            "Her bölüm güncel araştırma bulguları, uygulama içgörüleri ve stratejik değerlendirmelerle desteklenmiştir."
+        )
+
+        for paragraph in intro_paragraphs:
+            lines.append(paragraph)
+            lines.append("")
+
+        for index, (title, body) in enumerate(section_infos, 1):
+            lines.append(f"## {index}. {title}")
+            lines.append("")
+            cleaned_body = body.strip()
+            if cleaned_body:
+                lines.append(cleaned_body)
+            else:
+                lines.append("_Bu bölüm için detaylı içerik sağlanamadı._")
+            lines.append("")
+
+        lines.append("## Sonuç ve Öneriler")
+        lines.append("")
+
+        if section_titles:
+            section_summary = ", ".join(section_titles)
+        else:
+            section_summary = topic_text
+
+        lines.append(
+            f"Rapor genelinde ele alınan {len(section_infos)} bölüm, {section_summary} başlıkları üzerinden bütünsel bir çerçeve sunmaktadır."
+        )
+        lines.append(
+            "Bu bulgular, kurumların stratejik planlama, teknoloji yatırımları ve operasyonel iyileştirme süreçleri için yol gösterici niteliktedir."
+        )
+        lines.append("")
+        lines.append("### Önerilen Adımlar")
+        lines.append("")
+        lines.append("- Bulguları periyodik olarak güncelleyecek bir izleme ve değerlendirme mekanizması kurun.")
+        lines.append("- Paydaşlarla paylaşılacak atölye ve bilgilendirme oturumları planlayın.")
+        lines.append("- Öncelikli fırsat ve risklere yönelik pilot projeler tasarlayarak öğrenimleri hızlandırın.")
+
+        while lines and lines[-1] == "":
+            lines.pop()
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_section_title_and_body(section_text: str, index: int) -> tuple[str, str]:
+        """Bölüm içeriğinden başlık ve gövdeyi ayıkla."""
+
+        if not section_text.strip():
+            return f"Bölüm {index}", ""
+
+        lines = section_text.strip().splitlines()
+        heading_pattern = re.compile(r"^\s*(#{1,6})\s+(.*)$")
+
+        for line_index, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            match = heading_pattern.match(line)
+            if match:
+                title = match.group(2).strip() or f"Bölüm {index}"
+                body = "\n".join(lines[line_index + 1 :]).strip()
+                return title, body
+
+            title = stripped.lstrip("#").strip() or f"Bölüm {index}"
+            body = "\n".join(lines[line_index + 1 :]).strip()
+            return title, body
+
+        return f"Bölüm {index}", section_text.strip()
+
+    @staticmethod
+    def _slugify_title(title: str, index: int) -> str:
+        """Başlıktan markdown anchor üret."""
+
+        slug = re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+        if not slug:
+            slug = f"bolum-{index}"
+        return slug
 
 # Test fonksiyonu
 async def test_writer():

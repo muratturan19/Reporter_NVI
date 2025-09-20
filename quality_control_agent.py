@@ -246,8 +246,9 @@ Düzeltilmiş raporu ver:""")
 
     def _basic_cleanup(self, text: str) -> str:
         """Temel temizlik işlemleri"""
-        # Non-printable karakterleri temizle
-        text = re.sub(r'[^\x20-\x7E\u00A0-\u017F\u0100-\u024F\u1E00-\u1EFF]', '', text)
+        # Non-printable karakterleri temizle (ancak satır sonlarını koru)
+        allowed_char_pattern = r'[^\x09\x0A\x0D\x20-\x7E\u00A0-\u017F\u0100-\u024F\u1E00-\u1EFF]'
+        text = re.sub(allowed_char_pattern, '', text)
 
         # Broken HTML anchor tags düzelt
         text = re.sub(r'<a name="([^"]*)"[^>]*>([^<]*)</a>', r'## \2', text)
